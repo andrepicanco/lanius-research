@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m venv .venv)",
+      "WebSearch",
+      "WebFetch(domain:www.mql5.com)",
+      "Bash(.venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}
