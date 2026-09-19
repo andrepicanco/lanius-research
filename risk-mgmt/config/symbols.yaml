@@ -1,0 +1,25 @@
+# Basket of instruments for correlation.
+#
+# `specs` (tick_value/tick_size per symbol) is OPTIONAL - it's the pricing info the
+# mql5_journal log source needs to turn a raw fill (price + lots) into $ P/L, since the
+# raw Journal text never carries it. If a symbol isn't listed here, the parser fetches
+# its spec live from MT5 instead (same connection as --mode live) and only fails if
+# neither is available - so on a machine with MT5 open, you generally don't need to
+# fill this in at all. It stays useful for two cases: running purely offline/CI with no
+# MT5 reachable, or overriding what the broker reports. If you do fill it in, use the
+# real values from each symbol's Specification tab in MT5 (right-click the symbol in
+# Market Watch -> Specification -> "Tick value"/"Tick size") - a wrong manual value
+# silently produces a wrong $ figure, since the parser has no way to detect that it's
+# wrong (a live-fetched value can't be wrong the same way - it comes straight from the
+# broker).
+
+symbols:
+  - SP500
+  - ASXAUD
+  - NAS100
+  - DAX40
+  - IBXEUR
+  - XAUUSD
+  - BTCUSD
+
+specs: {}

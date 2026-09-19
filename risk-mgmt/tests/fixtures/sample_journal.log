@@ -1,0 +1,87 @@
+2026.08.21 23:35:11.712	MetaTester 5 started on 127.0.0.1:3000
+2026.08.21 23:35:11.716	cloud network mode is off
+2026.08.21 23:35:11.716	initialization finished
+2026.08.21 23:35:11.895	login (build 6140)
+2026.08.21 23:35:12.041	34760 bytes of account info loaded
+2026.08.21 23:35:12.041	1478 bytes of tester parameters loaded
+2026.08.21 23:35:12.041	10436 bytes of input parameters loaded
+2026.08.21 23:35:12.055	71762 bytes of symbols list loaded (7401 symbols)
+2026.08.21 23:35:12.055	expert file added: Experts\IdxSwing91\IdxSwing91.ex5. 52533 bytes loaded
+2026.08.21 23:35:12.071	8829 Mb available, 109 blocks set for ticks generating
+2026.08.21 23:35:12.071	initial deposit 10000.00 USD, leverage 1:100
+2026.08.21 23:35:12.071	successfully initialized
+2026.08.21 23:35:12.071	104 Kb of total initialization data received
+2026.08.21 23:35:12.072	Intel Core i5-3470  @ 3.20GHz, 16333 MB
+2026.08.21 23:35:12.100	ES35: symbol to be synchronized
+2026.08.21 23:35:12.100	ES35: symbol synchronized, 3720 bytes of symbol info received
+2026.08.21 23:35:12.100	ES35: history synchronization started
+2026.08.21 23:35:12.101	ES35: load 23 bytes of history data to synchronize in 0:00:00.000
+2026.08.21 23:35:12.101	ES35: history synchronized from 2025.01.02 to 2026.08.20
+2026.08.21 23:35:12.124	ES35,H2: history cache allocated for 3827 bars and contains 1844 bars from 2025.01.02 10:00 to 2025.12.31 14:00
+2026.08.21 23:35:12.124	ES35,H2: history begins from 2025.01.02 10:00
+2026.08.21 23:35:12.124	ES35,H2 (ICMarketsSC-Demo): every tick generating
+2026.08.21 23:35:12.124	testing with execution delay 100 milliseconds
+2026.08.21 23:35:12.124	ES35,H2: testing of Experts\IdxSwing91\IdxSwing91.ex5 from 2026.01.01 00:00 to 2026.08.20 00:00 started with inputs:
+2026.08.21 23:35:12.124	  InpTimeframe=0
+2026.08.21 23:35:12.124	  InpEMAPeriod=16
+2026.08.21 23:35:12.124	  InpSMAPeriod=21
+2026.08.21 23:35:12.124	  InpTriggerValidBars=4
+2026.08.21 23:35:12.124	  InpSLBufferPoints=1200
+2026.08.21 23:35:12.124	  InpTP_RMultiple=1.8
+2026.08.21 23:35:12.124	  InpUseTrailing=true
+2026.08.21 23:35:12.124	  InpATRPeriod=21
+2026.08.21 23:35:12.124	  InpATRMultiplier=1.6
+2026.08.21 23:35:12.124	  InpUseFixedLot=true
+2026.08.21 23:35:12.124	  InpFixedLot=0.2
+2026.08.21 23:35:12.124	  InpRiskPercent=1.0
+2026.08.21 23:35:12.124	  InpMagicNumber=910091
+2026.08.21 23:35:12.124	  InpTradeComment=IdxSwing91
+2026.08.21 23:35:12.124	  InpSlippagePoints=10
+2026.08.21 23:35:12.124	  InpMaxSpreadPoints=0
+2026.08.21 23:35:12.124	  InpUseTradingHoursFilter=true
+2026.08.21 23:35:12.124	  InpStartHour=11
+2026.08.21 23:35:12.124	  InpEndHour=23
+2026.08.21 23:35:12.124	  InpLogLevel=0
+2026.08.21 23:35:12.143	2026.01.01 00:00:00   [IdxSwing91][ES35][INFO] OnInit: ready. TF=PERIOD_H2 EMA=16 SMA=21 TriggerValidBars=4
+2026.08.21 23:35:50.359	2026.01.06 22:00:00   failed buy stop 0.2 ES35 at 17656.00 sl: 17561.00 tp: 17827.00 [Market closed]
+2026.08.21 23:35:50.359	2026.01.06 22:00:00   CTrade::OrderSend: buy stop 0.20 ES35 at 17656.00 sl: 17561.00 tp: 17827.00 [market closed]
+2026.08.21 23:35:50.359	2026.01.06 22:00:00   [IdxSwing91][ES35][ERROR] PlaceStopOrder failed: retcode=10018 desc=market closed
+2026.08.21 23:35:50.359	2026.01.06 22:00:00   [IdxSwing91][ES35][ERROR] HandleIdleState: order placement failed - retcode=10018 desc=market closed
+2026.08.21 23:36:02.804	2026.01.07 18:00:00   buy stop 0.2 ES35 at 17628.00 sl: 17535.50 tp: 17794.50 (17583.50 / 17586.50 / 17583.50)
+2026.08.21 23:36:02.806	2026.01.07 18:00:00   CTrade::OrderSend: buy stop 0.20 ES35 at 17628.00 sl: 17535.50 tp: 17794.50 [done]
+2026.08.21 23:36:02.806	2026.01.07 18:00:00   [IdxSwing91][ES35][INFO] HandleIdleState: placed BUY stop @ 17628.00000 SL=17535.50000 TP=17794.50000 lots=0.20 ticket=2
+2026.08.21 23:36:02.516	2026.01.08 10:00:00   order canceled [#2 buy stop 0.2 ES35 at 17628.00]
+2026.08.21 23:36:02.518	2026.01.08 10:00:00   CTrade::OrderSend: cancel #2 [done]
+2026.08.21 23:36:02.518	2026.01.08 10:00:00   [IdxSwing91][ES35][INFO] HandlePendingState: trigger expired, cancelling pending order
+2026.08.21 23:33:05.135	2026.01.08 14:00:00   sell stop 0.2 ES35 at 17568.00 sl: 17643.00 tp: 17433.00 (17618.00 / 17621.00 / 17618.00)
+2026.08.21 23:33:05.135	2026.01.08 14:00:00   CTrade::OrderSend: sell stop 0.20 ES35 at 17568.00 sl: 17643.00 tp: 17433.00 [done]
+2026.08.21 23:33:05.135	2026.01.08 14:00:00   [IdxSwing91][ES35][INFO] HandleIdleState: placed SELL stop @ 17568.00000 SL=17643.00000 TP=17433.00000 lots=0.20 ticket=3
+2026.08.21 23:33:21.607	2026.01.09 09:00:00   order canceled [#3 sell stop 0.2 ES35 at 17568.00]
+2026.08.21 23:33:21.607	2026.01.09 09:00:00   CTrade::OrderSend: cancel #3 [done]
+2026.08.21 23:33:21.607	2026.01.09 09:00:00   [IdxSwing91][ES35][INFO] HandlePendingState: trigger expired, cancelling pending order
+2026.08.21 23:33:36.623	2026.01.09 18:00:00   sell stop 0.2 ES35 at 17568.30 sl: 17657.00 tp: 17408.64 (17644.50 / 17647.50 / 17644.50)
+2026.08.21 23:33:36.623	2026.01.09 18:00:00   CTrade::OrderSend: sell stop 0.20 ES35 at 17568.30 sl: 17657.00 tp: 17408.64 [done]
+2026.08.21 23:33:36.623	2026.01.09 18:00:00   [IdxSwing91][ES35][INFO] HandleIdleState: placed SELL stop @ 17568.30000 SL=17657.00000 TP=17408.64000 lots=0.20 ticket=4
+2026.08.21 23:35:50.359	2026.01.12 09:19:36   order [#4 sell stop 0.2 ES35 at 17568.30] triggered
+2026.08.21 23:35:50.359	2026.01.12 09:19:36   deal #2 sell 0.2 ES35 at 17567.48 done (based on order #4)
+2026.08.21 23:35:50.359	2026.01.12 09:19:36   deal performed [#2 sell 0.2 ES35 at 17567.48]
+2026.08.21 23:35:50.359	2026.01.12 09:19:36   order performed sell 0.2 at 17567.48 [#4 sell stop 0.2 ES35 at 17568.30]
+2026.08.21 23:35:50.359	2026.01.12 10:00:00   position modified [#4 sell 0.2 ES35 17567.48 sl: 17644.74 tp: 17408.64]
+2026.08.21 23:35:50.359	2026.01.12 10:00:00   CTrade::OrderSend: modify position #4 ES35 (sl: 17644.74, tp: 17408.64) [done]
+2026.08.21 23:35:50.359	2026.01.12 10:41:37   take profit triggered #4 sell 0.2 ES35 17567.48 sl: 17644.74 tp: 17408.64 [#5 buy 0.2 ES35 at 17408.64]
+2026.08.21 23:35:50.359	2026.01.12 10:41:37   deal #3 buy 0.2 ES35 at 17408.42 done (based on order #5)
+2026.08.21 23:35:50.359	2026.01.12 10:41:37   deal performed [#3 buy 0.2 ES35 at 17408.42]
+2026.08.21 23:35:50.359	2026.01.12 10:41:37   order performed buy 0.2 at 17408.42 [#5 buy 0.2 ES35 at 17408.64]
+2026.08.21 23:33:05.135	2026.01.12 16:00:00   sell stop 0.2 ES35 at 17579.80 sl: 17661.00 tp: 17433.64 (17634.00 / 17637.00 / 17634.00)
+2026.08.21 23:33:05.135	2026.01.12 16:00:00   CTrade::OrderSend: sell stop 0.20 ES35 at 17579.80 sl: 17661.00 tp: 17433.64 [done]
+2026.08.21 23:33:05.135	2026.01.12 16:00:00   [IdxSwing91][ES35][INFO] HandleIdleState: placed SELL stop @ 17579.80000 SL=17661.00000 TP=17433.64000 lots=0.20 ticket=6
+2026.08.21 23:33:21.605	2026.01.13 09:00:00   order canceled [#6 sell stop 0.2 ES35 at 17579.80]
+2026.08.21 23:33:21.607	2026.01.13 09:00:00   CTrade::OrderSend: cancel #6 [done]
+2026.08.21 23:33:21.607	2026.01.13 09:00:00   [IdxSwing91][ES35][INFO] HandlePendingState: trigger expired, cancelling pending order
+2026.08.21 23:33:36.668	2026.01.13 14:00:00   buy stop 0.2 ES35 at 17714.50 sl: 17599.00 tp: 17922.40 (17623.00 / 17626.00 / 17623.00)
+2026.08.21 23:33:36.668	2026.01.13 14:00:00   CTrade::OrderSend: buy stop 0.20 ES35 at 17714.50 sl: 17599.00 tp: 17922.40 [done]
+2026.08.21 23:33:36.668	2026.01.13 14:00:00   [IdxSwing91][ES35][INFO] HandleIdleState: placed BUY stop @ 17714.50000 SL=17599.00000 TP=17922.40000 lots=0.20 ticket=7
+2026.08.21 23:33:40.025	stopped by user
+2026.08.21 23:33:40.025	test Experts\IdxSwing91\IdxSwing91.ex5 on ES35,H2 thread finished
+2026.08.21 23:33:40.047	prepare for shutdown
+2026.08.21 23:33:40.047	shutdown finished

@@ -1,0 +1,10 @@
+# Risk-analysis parameters. See risk_mgmt/config.py for validation rules.
+
+# Parametric VaR
+var_confidence: 0.95      # e.g. 0.95 = 95% confidence
+var_window_days: 10       # "current" VaR window
+var_baseline_days: 60     # longer-run comparison window (must be > var_window_days)
+
+# Correlation (always daily close-to-close returns)
+corr_window_days: 20      # rolling window for "which pairs correlate right now"
+top_n_pairs: 5            # how many pairs to report

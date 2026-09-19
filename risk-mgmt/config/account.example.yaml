@@ -1,0 +1,20 @@
+# Optional: lets the CLI log in to a specific MT5 account/server itself for --mode live,
+# instead of requiring you to open the terminal and log in by hand first.
+#
+# To use: copy this file to "account.yaml" (same folder) and fill in your real
+# credentials. account.yaml is gitignored - never commit real credentials.
+#
+# For GitHub Actions (or anywhere else you'd rather not put credentials in a file),
+# set MT5_LOGIN / MT5_PASSWORD / MT5_SERVER as environment variables instead - they
+# take priority over this file when all three are set (see risk_mgmt/account.py).
+#
+# If neither this file nor the env vars are present, the CLI just attaches to whatever
+# MT5 terminal is already open and logged in on this machine.
+
+login: 12345678          # your account number
+password: "your-password"
+server: "YourBroker-Demo" # exact server name as shown in the terminal's login dialog
+
+# Only needed if MT5 can't auto-detect the installed terminal (e.g. a second/portable
+# install). Point at the terminal64.exe of the terminal you want this account to use.
+# path: "C:\\Program Files\\MetaTrader 5\\terminal64.exe"

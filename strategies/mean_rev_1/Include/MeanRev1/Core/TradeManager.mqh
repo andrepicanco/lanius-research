@@ -32,6 +32,29 @@ private:
       return MathMax(stopsLevel, freezeLevel);
      }
 
+   //--- ticket of our own open position on this symbol, or 0 if we have none.
+   //--- Walks the position list rather than calling PositionSelect(symbol): on a
+   //--- hedging account a symbol can hold several positions at once, and
+   //--- PositionSelect() returns whichever comes first - quite possibly another
+   //--- EA's. The magic check would then reject it and we would conclude we are
+   //--- flat while our own position is still open. Works unchanged on netting.
+   ulong             FindPositionTicket(void) const
+     {
+      const int total = PositionsTotal();
+      for(int i = 0; i < total; i++)
+        {
+         const ulong ticket = PositionGetTicket(i);
+         if(ticket == 0)
+            continue;
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol)
+            continue;
+         if((long)PositionGetInteger(POSITION_MAGIC) != m_magic)
+            continue;
+         return ticket;
+        }
+      return 0;
+     }
+
 public:
                      CTradeManager(void) : m_symbol(_Symbol), m_magic(0), m_slippagePoints(10), m_logger(NULL) {}
 
@@ -48,8 +71,9 @@ public:
      }
 
    //--- opens a market position in dir; returns the resulting position ticket
-   //--- (>0) on success, 0 on failure. Assumes a netting-mode account (single
-   //--- position per symbol+magic), same invariant HasOpenPosition()/ApplyTrailing() rely on.
+   //--- (>0) on success, 0 on failure. One position per symbol+magic is the
+   //--- invariant the whole class relies on - the state machine only calls this
+   //--- from STATE_IDLE - but it no longer assumes the *account* is netting.
    ulong             OpenMarketPosition(const ENUM_TRIGGER_DIR dir, double sl, double tp,
                                          const double lots, const string comment)
      {
@@ -97,22 +121,26 @@ public:
          return 0;
         }
 
-      if(!PositionSelect(m_symbol))
+      const ulong ticket = FindPositionTicket();
+      if(ticket == 0)
         {
          if(m_logger != NULL)
             m_logger.Log(LOG_ERROR, "OpenMarketPosition: trade reported success but no position found");
          return 0;
         }
-      return (ulong)PositionGetInteger(POSITION_TICKET);
+      return ticket;
      }
 
    //--- actively closes our open position (used by the time-based exit)
    bool              ClosePosition(void)
      {
-      if(!PositionSelect(m_symbol) || (long)PositionGetInteger(POSITION_MAGIC) != m_magic)
+      const ulong ticket = FindPositionTicket();
+      if(ticket == 0)
          return true; // already gone - nothing to do
 
-      if(!m_trade.PositionClose(m_symbol, (ulong)m_slippagePoints))
+      // by ticket, not by symbol: PositionClose(symbol) is ambiguous on a hedging
+      // account and could close a position belonging to another EA
+      if(!m_trade.PositionClose(ticket, (ulong)m_slippagePoints))
         {
          if(m_logger != NULL)
             m_logger.Log(LOG_WARN, StringFormat("ClosePosition: PositionClose failed retcode=%d", m_trade.ResultRetcode()));
@@ -124,13 +152,14 @@ public:
    //--- true if a position with our magic is open on our symbol
    bool              HasOpenPosition(void) const
      {
-      return PositionSelect(m_symbol) && (long)PositionGetInteger(POSITION_MAGIC) == m_magic;
+      return FindPositionTicket() > 0;
      }
 
    //--- only tightens the stop, never loosens; applies at most once per new bar (called from that context)
    bool              ApplyTrailing(const double atrValue, const double atrMultiplier)
      {
-      if(!PositionSelect(m_symbol) || (long)PositionGetInteger(POSITION_MAGIC) != m_magic)
+      const ulong ticket = FindPositionTicket();
+      if(ticket == 0 || !PositionSelectByTicket(ticket))
          return false;
       if(atrValue <= 0.0 || atrMultiplier <= 0.0)
          return false;
@@ -164,7 +193,7 @@ public:
             return false;
         }
 
-      if(!m_trade.PositionModify(m_symbol, newSL, tp))
+      if(!m_trade.PositionModify(ticket, newSL, tp))
         {
          if(m_logger != NULL)
             m_logger.Log(LOG_WARN, StringFormat("ApplyTrailing: PositionModify failed retcode=%d", m_trade.ResultRetcode()));

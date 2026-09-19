@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+outputs/
+.venv/
+venv/
+config/account.yaml
+SESSION_NOTES.md

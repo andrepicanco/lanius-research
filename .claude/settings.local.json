@@ -4,7 +4,13 @@
       "Bash(python -m venv .venv)",
       "WebSearch",
       "WebFetch(domain:www.mql5.com)",
-      "Bash(.venv/Scripts/python.exe -c ' *)"
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(python -c \"import pandas, numpy; print\\(pandas.__version__, numpy.__version__\\)\")",
+      "Bash(python recon.py)",
+      "Bash(python recon2.py)",
+      "Bash(python recon3.py)",
+      "Bash(python recon4.py)",
+      "Bash(python -)"
     ]
   }
 }
