@@ -103,6 +103,14 @@ Journal text doesn't carry those either: with MT5 open it fetches them live, oth
 fill in `specs:` in `config/symbols.yaml`. The HTML report source needs none of this —
 the broker already priced every deal in account currency.
 
+Watch for a symbol whose P/L comes back as exactly `0.00` with a correct trade count.
+MT5 reports `trade_tick_value = 0` when it can't convert to the account currency — an
+AUD-denominated CFD on a USD account, say, with the quote-currency pair missing from
+Market Watch. That zero used to multiply through into every trade silently; it is now
+rejected with an error naming the symbol. Fix it by adding the symbol and its quote pair
+to Market Watch, or by setting the values by hand under `specs:` (ASXAUD is in there as
+a worked example, including how its value was derived from a Tester report).
+
 None of this is about the terminal's UI language: MetaTrader writes its Journal trade
 lines (`deal #2 sell 0.3 NAS100 at ... done`, `take profit triggered #2 ...`) in English
 regardless of interface language.

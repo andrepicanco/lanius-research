@@ -206,9 +206,12 @@ def _read_text(path: Path) -> str:
 
 def _fetch_spec_from_mt5(symbol: str, account: AccountConfig | None) -> SymbolSpec | None:
     """Best-effort live lookup, used only as a fallback when a symbol has no explicit
-    entry in config/symbols.yaml. Returns None (never raises) on any failure - the
-    caller is responsible for turning "still not found" into a clear error, since a
-    silent None here just means "try the next thing" in both call sites that use it.
+    entry in config/symbols.yaml. Returns None when the terminal or the symbol simply
+    isn't reachable - that just means "try the next thing" to both call sites.
+
+    A terminal that answers with a zero tick value is a different case and deliberately
+    NOT swallowed into None: the lookup succeeded and gave an unusable number, which is
+    actionable, so SymbolSpec's own validation is allowed to raise through.
     """
     try:
         import MetaTrader5 as mt5
@@ -221,9 +224,11 @@ def _fetch_spec_from_mt5(symbol: str, account: AccountConfig | None) -> SymbolSp
         info = mt5.symbol_info(symbol)
         if info is None:
             return None
-        return SymbolSpec(symbol=symbol, tick_value=info.trade_tick_value, tick_size=info.trade_tick_size)
+        tick_value, tick_size = info.trade_tick_value, info.trade_tick_size
     except Exception:
         return None
+
+    return SymbolSpec(symbol=symbol, tick_value=tick_value, tick_size=tick_size)
 
 
 class MQL5JournalSource:

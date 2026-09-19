@@ -22,4 +22,15 @@ symbols:
   - XAUUSD
   - BTCUSD
 
-specs: {}
+specs:
+  # MT5 returns trade_tick_value = 0 for this one: it's an AUD-denominated CFD on a USD
+  # account, and the terminal won't convert unless the quote-currency pair is loaded in
+  # Market Watch. A zero is now rejected outright (see symbol_spec.py) instead of
+  # silently reporting $0.00 P/L for every ASXAUD trade.
+  #
+  # Derived from the Tester's own deals for the 2026-01..09 MeanRev1 run: 658.10 points
+  # of price movement against $681.99 of price P/L at 1.5 lots. Reproduces that total to
+  # the cent across all 83 trades, so the broker used a constant tick value over the
+  # period rather than a floating conversion. Re-derive it if the account currency or
+  # the contract spec ever changes.
+  ASXAUD: {tick_value: 0.0690868, tick_size: 0.1}
