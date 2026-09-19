@@ -1,0 +1,11 @@
+# Compiled MQL5 binaries (build artifacts, regenerate via MetaEditor compile)
+*.ex5
+*.ex4
+
+# MetaEditor/MetaTrader local artifacts
+*.log
+*.bak
+
+# OS artifacts
+Thumbs.db
+desktop.ini
