@@ -127,3 +127,39 @@ def test_creates_output_directory_if_missing(tmp_path: Path):
     write_monthly_workbook(asset_stats, summaries, confidence=0.95, output_path=nested)
 
     assert nested.exists()
+
+
+def test_long_backtest_does_not_walk_off_the_end_of_the_alphabet(tmp_path):
+    """Column letters used to be built as chr(ord("C") + i), which produces "[" and "\\"
+    once a report has more than 24 months or symbols. openpyxl accepts the bad key and
+    only raises on save, so a 26-month run failed with "'[' is not a valid column name"
+    from deep inside the writer.
+    """
+    summaries = [
+        MonthSummary(
+            month=f"{2024 + (i // 12)}-{(i % 12) + 1:02d}",
+            trades=3,
+            win_rate=0.5,
+            total_pnl=10.0,
+            avg_pnl=3.3,
+            pnl_stdev=1.0,
+            best_trade=8.0,
+            worst_trade=-4.0,
+            max_drawdown=4.0,
+            avg_risk_money=50.0,
+            var_month=5.0,
+        )
+        for i in range(26)
+    ]
+    asset_stats = [
+        AssetMonthStats(month=s.month, symbol="EURUSD", trades=3, pnl=10.0, avg_pnl=3.3)
+        for s in summaries
+    ]
+
+    path = write_monthly_workbook(asset_stats, summaries, 0.95, tmp_path / "long.xlsx")
+
+    assert path.exists()
+    workbook = load_workbook(path)
+    widths = workbook["Monthly Report"].column_dimensions
+    assert "AB" in widths  # the 28th column, well past "Z"
+    assert not any(key in widths for key in ("[", "\\"))

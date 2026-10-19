@@ -43,3 +43,29 @@ def test_mixed_directory_refuses_to_guess(tmp_path):
 def test_missing_directory_is_reported_clearly(tmp_path):
     with pytest.raises(SystemExit, match="Not a directory"):
         _detect_source(str(tmp_path / "nope"))
+
+
+# --- --strategy vs --log-dir ---------------------------------------------------------
+
+from risk_mgmt.cli import build_parser  # noqa: E402
+
+
+def test_naming_both_a_strategy_and_a_log_dir_is_refused():
+    """They used to be silently combined, with --strategy winning: a run passing both
+    failed complaining about the --strategy path while never opening --log-dir at all."""
+    from risk_mgmt.cli import _parse_strategy_args
+
+    args = build_parser().parse_args(
+        ["--mode", "local", "--strategy", "MeanRev1=reports/meanrev", "--log-dir", "logs"]
+    )
+
+    with pytest.raises(SystemExit, match="alternatives, not a pair"):
+        _parse_strategy_args(args)
+
+
+def test_log_dir_alone_is_the_unnamed_strategy():
+    from risk_mgmt.cli import _parse_strategy_args
+
+    args = build_parser().parse_args(["--mode", "local", "--log-dir", "logs"])
+
+    assert _parse_strategy_args(args) == [(None, "logs")]

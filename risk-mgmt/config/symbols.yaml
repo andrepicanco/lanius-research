@@ -21,6 +21,10 @@ symbols:
   - IBXEUR
   - XAUUSD
   - BTCUSD
+  - EURUSD
+  - AUDJPY
+  - GBPUSD
+  - F40EUR
 
 specs:
   # MT5 returns trade_tick_value = 0 for this one: it's an AUD-denominated CFD on a USD

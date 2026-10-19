@@ -5,5 +5,8 @@ git_user.md
 # Pasta com estratégias
 strategies/
 
+# Pasta com registros das sessões
+session_notes/
+
 # Sample de resultado de testes do MT5
 risk-mgmt/MT5_test_sample/

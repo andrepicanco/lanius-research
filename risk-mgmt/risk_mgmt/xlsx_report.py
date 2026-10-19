@@ -13,10 +13,12 @@ from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
 
 from .monthly import AssetMonthStats, MonthSummary, cumulative_pnl_by_asset
 
 _BOLD = Font(bold=True)
+_FIRST_DATA_COLUMN = 3  # columns A and B hold the row labels
 
 _SUMMARY_METRICS = [
     ("Trades", lambda s: s.trades),
@@ -61,8 +63,12 @@ def write_monthly_workbook(
 
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 16
+    # get_column_letter, not chr(ord("C") + i): past the 24th column that arithmetic
+    # walks off the end of the alphabet into "[" and "\", and openpyxl only rejects the
+    # bad key when the workbook is saved, far from where it was built. A 26-month
+    # backtest is enough to hit it.
     for i in range(max(len(symbols), len(months))):
-        ws.column_dimensions[chr(ord("C") + i)].width = 12
+        ws.column_dimensions[get_column_letter(_FIRST_DATA_COLUMN + i)].width = 12
 
     wb.save(output_path)
     return output_path

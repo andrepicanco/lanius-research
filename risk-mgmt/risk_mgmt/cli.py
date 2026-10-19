@@ -77,6 +77,16 @@ def _detect_source(directory: str) -> str:
 def _parse_strategy_args(args) -> list[tuple[str | None, str]]:
     """`--strategy NAME=DIR`, repeatable. Splits on the first '=' only, so a Windows
     path keeps its drive letter and backslashes intact."""
+    if args.strategy and args.log_dir:
+        # --strategy used to just win and --log-dir was dropped without a word, so a
+        # run that named both reported an error about the --strategy path while the
+        # directory the caller actually cared about was never opened.
+        raise SystemExit(
+            "--strategy and --log-dir are alternatives, not a pair. --log-dir is the "
+            "unnamed single-directory form; --strategy NAME=DIR is the same thing with "
+            "a label, repeated once per strategy. Pick one."
+        )
+
     if args.strategy:
         pairs = []
         for entry in args.strategy:
