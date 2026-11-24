@@ -12,18 +12,17 @@ import datetime as dt
 import sys
 from pathlib import Path
 
-from .compare import compare
 from .config import Config, load_config
 from .discovery import DiscoveryError
 from .discovery_config import DiscoveryConfigError
 from .envfile import EnvFileError, load_env_file
 from .metrics import attach_r_multiples, compute_metrics
 from .models import Report
+from . import services
 from .report import render_telegram, render_text
 from .telegram import TelegramConfigError
 from .tester_report import ReportFormatError, read_report
-from .window import baseline_end, judged_window
-from .window import describe as describe_window
+from .window import baseline_end
 
 
 def load_baselines(cfg: Config) -> dict[str, Report]:
@@ -77,46 +76,17 @@ def _cmd_baselines(cfg: Config, args) -> int:
     return 0
 
 
-def _evaluate(cfg: Config, base: Report, current: Report):
-    """Métricas do run corrente (só a janela julgada, ver window.py) e o veredito contra o baseline."""
-    attach_r_multiples(current.trades)
-    trades, win = judged_window(base, current.trades)
-    cur_m = compute_metrics(trades, current.deposit, cfg.thresholds.confidence)
-    base_m = compute_metrics(base.trades, base.deposit, cfg.thresholds.confidence)
-    verdict = compare(base_m, cur_m, cfg)
-    verdict.context = describe_window(win)
-    return cur_m, verdict
-
-
-def _open_engine_data(cfg: Config):
-    """Conexão somente-leitura com a instância ABERTA do MT5 + cache de barras, para o motor Python.
-    Devolve (fonte, fábrica do cache); a fonte é um contexto: `with fonte as src: cache = fábrica(src)`."""
-    from .engine.mt5data import BarCache, Mt5Source
-    if cfg.mt5.terminal_path is None:
-        raise SystemExit("mt5.terminal_path não configurado (config/monitor.yaml): caminho do terminal64.exe do "
-                         "MT5 que você usa, já aberto e logado")
-    return Mt5Source(cfg.mt5.terminal_path), lambda src: BarCache(cfg.mt5.cache_dir, src)
-
-
 def _cmd_parity(cfg: Config, args) -> int:
     """Roda o motor Python sobre o período de cada baseline e compara com os trades do Tester."""
     from .engine import parity
     from .engine.mt5data import DataError
-    from .engine.run import run_engine, supported
     chosen = _pick(load_baselines(cfg), args.only)
-    source, make_cache = _open_engine_data(cfg)
     try:
-        with source as src:
-            cache = make_cache(src)
-            for b in chosen:
-                if not supported(b.expert):
-                    print(f"{b.label}: o motor ainda não implementa {b.expert}")
-                    continue
-                until = min(b.date_to, (max(t.close_time for t in b.trades) + dt.timedelta(days=1)).date())
-                rep = run_engine(b, cache, None, b.date_from, until)
-                print(parity.render(parity.compare_reports(b, rep)))
+        results = services.run_parity(cfg, chosen)
     except DataError as e:
         raise SystemExit(f"motor: {e}") from None
+    for par, _, base in results:
+        print(parity.render(par) if par else f"{base.label}: o motor ainda não implementa {base.expert}")
     return 0
 
 
@@ -124,40 +94,21 @@ def _cmd_monitor(cfg: Config, args) -> int:
     """O comando do dia a dia: para cada baseline (ou os que casam com ALVO), roda o motor Python só no período
     posterior ao baseline, compara com ele e imprime. Não abre o Strategy Tester."""
     from .engine.mt5data import DataError
-    from .engine.run import run_engine, supported
     chosen = _pick(load_baselines(cfg), args.alvo)
     until = dt.datetime.strptime(args.until, "%Y-%m-%d").date() if args.until else dt.date.today()
-    source, make_cache = _open_engine_data(cfg)
-    items, failures = [], 0
     try:
-        with source as src:
-            cache = make_cache(src)
-            for base in chosen:
-                if not supported(base.expert):
-                    print(f"{base.label}: o motor ainda não implementa {base.expert}", file=sys.stderr)
-                    failures += 1
-                    continue
-                cut = baseline_end(base)
-                if cut.date() >= until:
-                    print(f"{base.label}: nada novo a testar (o baseline cobre até {cut:%Y-%m-%d}; "
-                          f"o teste iria até {until}, exclusivo).")
-                    continue
-                try:
-                    current = run_engine(base, cache, None, cut.date(), until)
-                except DataError as e:
-                    print(f"[ERRO] {base.label}: {e}", file=sys.stderr)
-                    failures += 1
-                    continue
-                cur_m, verdict = _evaluate(cfg, base, current)
-                print(render_text(current, cur_m, verdict))
-                items.append((current, cur_m, verdict))
+        items, problems = services.run_monitor(cfg, chosen, until)
     except DataError as e:
         raise SystemExit(f"motor: {e}") from None
+    for it in items:
+        print(render_text(it.report, it.metrics, it.verdict))
+    for pr in problems:
+        print(pr, file=sys.stderr if pr.startswith("[ERRO]") or "não implementa" in pr else sys.stdout)
     if args.telegram and items:
         from .telegram import send_message
-        send_message(render_telegram(items))
+        send_message(render_telegram([(it.report, it.metrics, it.verdict) for it in items]))
         print("Resumo enviado ao Telegram.")
-    return 1 if failures else 0
+    return 1 if any(p.startswith("[ERRO]") or "não implementa" in p for p in problems) else 0
 
 
 def _cmd_discover(cfg: Config, args) -> int:
@@ -184,26 +135,11 @@ def _cmd_discover(cfg: Config, args) -> int:
     print(f"Total: ~{total_runs} backtests (~{max(1, round(total_runs * est_s / 60))} min).")
     if args.dry_run:
         return 0
-
-    out_dir = cfg.outputs_dir / "discovery" / f"{dt.datetime.now():%Y%m%d_%H%M%S}"
-    csvw = dsc.ResultsCsv(out_dir / "results.csv")
-    source, make_cache = _open_engine_data(cfg)
-    results, tpl_inputs = [], {}
     try:
-        with source as src:
-            run_fn = dsc.make_run_fn(make_cache(src))
-            for i in items:
-                print(f"\n== {i['spec'].expert} · {i['symbol']} {i['timeframe']}", flush=True)
-                res = dsc.discover_target(i["spec"], i["symbol"], i["template"], i["timeframe"], settings,
-                                          until, run_fn, log=lambda m: print(m, flush=True), on_row=csvw.add)
-                tpl_inputs[res.label] = i["template"].inputs
-                results.append(res)
+        results, out_dir, sets = services.run_discovery(cfg, settings, specs, baselines, args.only, until,
+                                                        log=lambda m: print(m, flush=True))
     except DataError as e:
         raise SystemExit(f"motor: {e}") from None
-    finally:
-        csvw.close()
-    dsc.write_report(out_dir / "report.md", results, settings, tpl_inputs, until)
-    sets = dsc.write_candidate_sets(out_dir, results)
     text = dsc.render_summary(results)
     print("\n" + text)
     print(f"\nRelatorio: {out_dir / 'report.md'}  |  CSV: {out_dir / 'results.csv'}  |  .set candidatos: {len(sets)}")

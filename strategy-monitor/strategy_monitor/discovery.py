@@ -192,6 +192,7 @@ class TargetResult:
     selection_note: str = ""
     errors: list[str] = field(default_factory=list)
     aborted: str | None = None
+    ref_inputs: dict = field(default_factory=dict)     # inputs do baseline/template (o "era X" do relatório)
 
 
 def selection_note(ers: list[float]) -> str:
@@ -234,6 +235,7 @@ def discover_target(spec: StrategySpec, symbol: str, template: Report, tf: str, 
         ref_inputs["InpTimeframe"] = str(tf_to_mt5_enum(tf))
     trials = sample_trials(spec.params, ref_inputs, s.trials, seed_for(s.seed, label))
     res.n_trials = len(trials)
+    res.ref_inputs = ref_inputs
     ev = Evaluator(run_fn, template, symbol, tf)
     consecutive_errors = 0
 

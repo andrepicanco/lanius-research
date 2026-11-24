@@ -13,7 +13,7 @@ permissão de administrador. Independente dos outros projetos: não importa cód
 | Motor Python (IdxSwing91, BreakoutDonchian1)                            | Pronto; paridade medida contra o Tester nos dois baselines (seção "Motor")          |
 | `discover`: busca de parâmetros com OOS, consistência e vizinhança      | Pronto; rodado de verdade no DAX40 (sem candidato: ver "Descoberta")                 |
 | Resumo no Telegram                                                      | Testado pelo André                                                                   |
-| Front-end local                                                         | Ainda não                                                                            |
+| Tela local (`interface.bat`)                                            | Pronta: monitor, baselines/paridade e descoberta com seleção de parâmetros           |
 
 ## Setup
 
@@ -29,6 +29,26 @@ python -m pytest tests -q
 `mt5.terminal_path` é o `terminal64.exe` do MT5 que você usa. **Ele precisa estar aberto e logado** quando
 você roda `monitor`, `parity` ou `discover`: o motor se conecta a essa instância pela API Python
 (`MetaTrader5`), **somente para ler** barras e a especificação do símbolo; nunca envia ordens.
+
+## Tela (front-end)
+
+```powershell
+.\interface.bat      # abre http://localhost:8501 no navegador; feche a janela do terminal para encerrar
+```
+
+Streamlit local (sem administrador, só escuta em `localhost`). Faz o mesmo que a CLI, com cliques:
+
+| Página         | O que tem                                                                                                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Monitor**    | Escolhe estratégias e a data final, roda o motor e mostra, por estratégia: selo de estado (ícone + texto), tabela baseline × período novo, curva de **R acumulado** dos dois, verificações e trades. Exporta **relatório HTML** autocontido e envia o resumo ao Telegram (botão explícito). |
+| **Baselines**  | Tabela dos baselines e o botão **Conferir motor (paridade)**: roda o motor no período do baseline e compara com o Tester (texto + curvas).                                                |
+| **Descoberta** | Escolhe a estratégia, os ativos (qualquer símbolo do MT5), **quais parâmetros liberar** (e a grade de cada um: faixa, lista ou múltiplos do baseline), janelas, teto de DD e validação. Mostra o plano e o tempo estimado, roda, lista finalistas com veredito e baixa `report.md`, `results.csv` e os `.set` candidatos. |
+
+Os valores iniciais da página Descoberta vêm de `config/discovery.yaml` (os "atuais"). O botão **Salvar como padrão**
+grava a seleção de volta nesse arquivo (mantém as outras estratégias; os comentários do arquivo se perdem, o modelo
+comentado fica em `discovery.example.yaml`). Cores: azul = baseline/Tester, laranja = período novo/motor; o estado
+nunca depende só de cor. A tela não foi conferida visualmente por mim em navegador: foi exercitada por teste
+automatizado do Streamlit com o MT5 real e o servidor subiu (HTTP 200).
 
 ## Uso no dia a dia
 
@@ -96,6 +116,8 @@ A linha **Trades/mês** só aparece com janela de pelo menos 30 dias. O código 
 | `parity [--only ALVO]`                   | Confere o motor contra os trades do Tester em cada baseline.                                | Sim                      |
 | `discover [--only] [--trials] [--dry-run] [--until] [--telegram] [--discovery-config]` | Busca parâmetros melhores; nunca aplica. | Sim (exceto `--dry-run`) |
 | `telegram-test`                          | Envia uma mensagem de teste.                                                                | Não                      |
+
+A tela (`interface.bat`) cobre `monitor`, `parity` e `discover`.
 
 Opções gerais, **antes** do comando: `--baseline-dir PASTA`, `--config ARQUIVO`, `--env-file ARQUIVO`.
 `ALVO` é um texto que casa com o nome do baseline, sem diferenciar maiúsculas (`DAX40`, `nas100`, `breakout`).
