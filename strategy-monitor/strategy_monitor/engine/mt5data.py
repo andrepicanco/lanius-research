@@ -202,8 +202,8 @@ class BarCache:
         self.dir = Path(cache_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.source = source
-        self._head: dict[tuple[str, str], int] = {}   # inicio ja pedido ao terminal, por serie (neste processo)
-        self._tail: dict[tuple[str, str], bool] = {}  # rabo (barras novas) ja atualizado, por serie
+        self._head: dict[tuple[str, str], int] = {}   # menor inicio ja pedido ao terminal, por serie (neste processo)
+        self._tail: dict[tuple[str, str], int] = {}   # maior fim ja pedido ao terminal, por serie (neste processo)
         self._specs: dict[str, SymbolSpec] = {}       # especificacao do simbolo, uma consulta por processo
 
     def _file(self, symbol: str, tf: str) -> Path:
@@ -233,21 +233,22 @@ class BarCache:
         s, e = epoch(start), epoch(end)
         if self.source is not None:
             key = (symbol, tf)
+            want_end = min(e, epoch(dt.datetime.now(_UTC).replace(tzinfo=None)))   # o terminal so tem ate agora
             if not len(cached):
                 cached = self._merge_save(symbol, tf, cached, self.source.rates(symbol, tf, start, end))
-                self._head[key], self._tail[key] = s, True
+                self._head[key], self._tail[key] = s, want_end
             else:
                 if cached["time"][0] > s + 5 * 86400 and s < self._head.get(key, cached["time"][0]):
                     head = self.source.rates(symbol, tf, start, from_epoch(int(cached["time"][0])))
                     cached = self._merge_save(symbol, tf, cached, head)
                     self._head[key] = s          # ja tentei: o terminal pode simplesmente nao ter mais historia
-                if key not in self._tail:
-                    now = epoch(dt.datetime.now(_UTC).replace(tzinfo=None))
-                    if cached["time"][-1] < now - 6 * 3600:
-                        tail = self.source.rates(symbol, tf, from_epoch(int(cached["time"][-1]) - 86400),
-                                                 from_epoch(now + 86400))
-                        cached = self._merge_save(symbol, tf, cached, tail)
-                    self._tail[key] = True
+                # Fim: o cache precisa chegar ate o fim PEDIDO. Pedidos com fim maior que o ja atendido neste
+                # processo buscam as barras novas (bug de 2026-11-24: a 1a consulta de um simbolo novo era a do
+                # IS, que termina antes do OOS; marcar o "rabo" como feito deixava o OOS sem nenhuma barra).
+                if cached["time"][-1] < want_end - 6 * 3600 and want_end > self._tail.get(key, 0):
+                    tail = self.source.rates(symbol, tf, from_epoch(int(cached["time"][-1]) - 86400), end)
+                    cached = self._merge_save(symbol, tf, cached, tail)
+                    self._tail[key] = want_end
         return cached[(cached["time"] >= s) & (cached["time"] < e)]
 
     def spec(self, symbol: str) -> SymbolSpec:

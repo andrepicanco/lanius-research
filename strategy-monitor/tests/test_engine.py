@@ -1,6 +1,8 @@
 """Motor Python: indicadores, simulacao de posicao e um rompimento de ponta a ponta com dados sinteticos.
 A fidelidade contra o Tester NAO e testada aqui (precisa do MT5): ela e o comando `parity`."""
 
+import datetime as dt
+
 import numpy as np
 import pytest
 
@@ -179,3 +181,70 @@ def test_source_refuses_to_start_when_the_terminal_is_not_running(monkeypatch):
     with pytest.raises(mt5data.DataError, match="não está aberto"):
         with mt5data.Mt5Source("terminal64.exe"):
             pass
+
+
+# ------------------------------------------------------------ cache de barras: bug do OOS sem dados (2026-11-23)
+
+class _FakeSource:
+    """Terminal falso: devolve uma barra por hora em [start, end)."""
+    maxbars = 100_000
+
+    def rates(self, symbol, tf, start, end):
+        from strategy_monitor.engine import mt5data
+        step = 3600
+        times = np.arange(mt5data.epoch(start) // step * step, mt5data.epoch(end), step)
+        out = np.zeros(len(times), dtype=mt5data._DTYPE)
+        out["time"] = times
+        out["open"] = out["high"] = out["low"] = out["close"] = 100.0
+        return out
+
+
+def test_cache_extends_to_a_later_window_after_the_first_query_of_a_new_symbol(tmp_path):
+    """A 1ª consulta de um símbolo novo é a do IS (termina antes do OOS). A do OOS, depois, tem que buscar as
+    barras novas: antes, o OOS ficava sem nenhuma barra e a descoberta mostrava n=0 em silêncio."""
+    from strategy_monitor.engine.mt5data import BarCache, from_epoch
+    cache = BarCache(tmp_path, _FakeSource())
+    is_start, oos_start, until = dt.datetime(2026, 1, 1), dt.datetime(2026, 4, 1), dt.datetime(2026, 6, 1)
+    assert len(cache.get("XYZ", "H1", is_start, oos_start)) > 24 * 80
+    oos = cache.get("XYZ", "H1", oos_start, until)
+    assert len(oos) > 24 * 55 and from_epoch(int(oos["time"][-1])) > dt.datetime(2026, 5, 29)
+
+
+def _engine_fixture(tmp_path, data_end):
+    """Cache em disco (sem MT5) com H1 + M1 até `data_end`, e um baseline do IdxSwing91 para esse símbolo."""
+    from dataclasses import asdict
+
+    from strategy_monitor.engine import mt5data
+    from strategy_monitor.engine.mt5data import BarCache
+    from strategy_monitor.models import Report
+
+    def series(step, a, b):
+        times = np.arange(mt5data.epoch(a), mt5data.epoch(b), step)
+        arr = np.zeros(len(times), dtype=mt5data._DTYPE)
+        arr["time"] = times
+        arr["open"] = arr["high"] = arr["low"] = arr["close"] = 100.0 + np.sin(times / 40000.0)
+        return arr
+
+    first = dt.datetime(2026, 1, 20)
+    for tf, step in (("H1", 3600), ("M1", 60)):
+        np.savez_compressed(tmp_path / f"TST_{tf}.npz", bars=series(step, first, data_end))
+    (tmp_path / "TST_spec.json").write_text(__import__("json").dumps(asdict(SPEC)), encoding="utf-8")
+    base = Report(source="t", expert="IdxSwing91", symbol="TST", timeframe="H1", date_from=dt.date(2026, 2, 1),
+                  date_to=dt.date(2026, 3, 1), inputs={"InpTimeframe": "16385"}, deposit=10000.0,
+                  history_quality=None, ticks=None, trades=[])
+    return base, BarCache(tmp_path, None)
+
+
+def test_engine_refuses_a_window_whose_data_ends_long_before_the_requested_end(tmp_path):
+    from strategy_monitor.engine.mt5data import DataError
+    from strategy_monitor.engine.run import run_engine
+    base, cache = _engine_fixture(tmp_path, dt.datetime(2026, 3, 4))
+    with pytest.raises(DataError, match="terminam em 2026-03-0[34]"):
+        run_engine(base, cache, None, dt.date(2026, 3, 1), dt.date(2026, 3, 11))
+
+
+def test_engine_accepts_a_window_covered_up_to_a_weekend(tmp_path):
+    from strategy_monitor.engine.run import run_engine
+    base, cache = _engine_fixture(tmp_path, dt.datetime(2026, 3, 10))
+    rep = run_engine(base, cache, None, dt.date(2026, 3, 1), dt.date(2026, 3, 11))
+    assert rep.trades == [] and rep.symbol == "TST"                      # sem erro; série plana não gera sinal

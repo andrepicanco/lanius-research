@@ -51,6 +51,16 @@ def run_engine(base: Report, cache: BarCache, inputs: dict | None, from_date: dt
     sub = cache.get(base.symbol, sub_tf, start - dt.timedelta(days=2), end)
     if len(work) < 100 or len(sub) < 10:
         raise DataError(f"historico insuficiente de {base.symbol} {work_tf}/{sub_tf} ({len(work)}/{len(sub)} barras)")
+    # Lacuna no fim: dados que terminam bem antes do fim pedido dariam "zero trades" em silencio (foi o que ocorreu
+    # no OOS da descoberta de 2026-11-23). Feriados/fins de semana somam no maximo ~5 dias sem barras.
+    now = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    horizon = min(end, now)
+    for name, arr in ((work_tf, work), (sub_tf, sub)):
+        gap = (horizon - from_epoch(int(arr["time"][-1]))).days
+        if gap > 5:
+            raise DataError(f"os dados de {base.symbol} {name} terminam em {from_epoch(int(arr['time'][-1])):%Y-%m-%d}, "
+                            f"{gap} dias antes do fim pedido ({end:%Y-%m-%d}): o resultado seria 'zero trades' por falta "
+                            "de dados. Confira se o MT5 tem o histórico recente desse símbolo.")
     m = Market.build(spec, work, sub, period_s)
     i0 = int(np.searchsorted(m.wT, epoch(start), "left"))
 
