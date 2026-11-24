@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+config/monitor.yaml
+outputs/
+config/discovery.yaml
+.env
+
+# Plano e sessões
+plan/
+data_cache/
