@@ -79,8 +79,8 @@ strategies:
     assert [p.name for p in specs[0].params] == ["InpX", "InpY"]
 
 
-@pytest.mark.parametrize("param", ["InpMagicNumber", "InpRiskPercent", "InpFixedLot", "InpUseFixedLot"])
-def test_config_refuses_sizing_and_identity_params(tmp_path, param):
+@pytest.mark.parametrize("param", ["InpMagicNumber", "InpTradeComment", "InpLogLevel", "InpRiskPercent"])
+def test_config_refuses_identity_and_risk_percent_params(tmp_path, param):
     with pytest.raises(DiscoveryConfigError, match=param):
         load_discovery_config(_write(tmp_path, f"""
 settings: {{max_drawdown_pct: 4}}
@@ -220,6 +220,20 @@ def test_dead_parameter_neighbours_do_not_inflate_the_neighbourhood():
     assert best.inputs["InpA"] == "3"
     assert len(best.live_neighbors) < len(best.neighbor_rows)           # os vizinhos de InpDead saíram da conta
     assert best.neighbor_median is not None and best.neighbor_median <= 0   # sobram InpA=2 e 4: ruins
+    assert not best.qualified and "pico isolado" in best.verdict
+
+
+def test_lot_size_neighbours_do_not_count_because_they_do_not_change_er():
+    """O lote escala o DD mas não o E[R]: o vizinho que só troca o lote não pode servir de 'robustez'."""
+    specs = [ParamSpec("InpA", "int", values=[1, 2, 3, 4]), ParamSpec("InpFixedLot", "float", values=[0.1, 0.2, 0.5])]
+    spec = StrategySpec("EA", ["TST"], specs)
+    tpl = _template({"InpA": "1", "InpFixedLot": "0.1"})
+    edge = lambda i, f, u: GOOD if i["InpA"] == "3" else BAD
+    res = dsc.discover_target(spec, "TST", tpl, "H1", _settings(), UNTIL,
+                              fake_engine(edge, [], dead=("InpFixedLot",)))
+    best = res.finalists[0]
+    assert best.inputs["InpA"] == "3"
+    assert all("InpFixedLot" not in r.changed for r in best.live_neighbors)
     assert not best.qualified and "pico isolado" in best.verdict
 
 

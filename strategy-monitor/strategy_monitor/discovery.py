@@ -164,11 +164,12 @@ class Finalist:
 
     @property
     def live_neighbors(self) -> list[Row]:
-        """Vizinhos que de fato mudam o resultado. Um parâmetro "morto" (ex.: multiplicador do trailing com o
-        trailing desligado) repete o resultado do finalista e inflaria a mediana: fica de fora."""
+        """Vizinhos que trazem informação sobre o E[R]. Um parâmetro que não muda o E[R] (morto, como o
+        multiplicador do trailing com o trailing desligado; ou o tamanho do lote, que só escala o DD) repete o
+        E[R] do finalista e inflaria a mediana: fica de fora."""
         m = self.is_row.metrics
         return [r for r in self.neighbor_rows if r.metrics is not None and m is not None
-                and (r.metrics.n, round(r.metrics.net, 6)) != (m.n, round(m.net, 6))]
+                and (r.metrics.n, round(r.metrics.expectancy_r or 0.0, 6)) != (m.n, round(m.expectancy_r or 0.0, 6))]
 
     @property
     def neighbor_median(self) -> float | None:

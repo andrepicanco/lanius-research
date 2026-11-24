@@ -216,6 +216,8 @@ def page_discovery(cfg, baselines):
                               default=[p for p in default_sel if p in tun],
                               help="Só o que estiver aqui é alterado; o resto fica como no baseline. "
                                    "Magic number, comentário e dimensionamento de lote não aparecem: não criam edge.")
+    for w in logic.dependency_warnings(selected, base_inputs):
+        st.warning(w)
     specs, form_error = [], None
     by_name = {p.name: p for p in (d_spec.params if d_spec else [])}
     for name in selected:

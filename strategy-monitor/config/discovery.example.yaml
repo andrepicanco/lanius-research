@@ -33,4 +33,5 @@ strategies:
       InpTrailATRMultiplier:   {type: float, min: 1.0, max: 4.0, step: 0.5}
 
 # Recusados de proposito (nao criam edge ou identificam o EA): InpMagicNumber, InpTradeComment,
-# InpLogLevel, InpRiskPercent, InpFixedLot, InpUseFixedLot.
+# InpLogLevel, InpRiskPercent. O tamanho da posicao varia por InpUseFixedLot + InpFixedLot (libere os DOIS:
+# InpFixedLot so tem efeito com InpUseFixedLot ligado). Lote nao muda o E[R], so o drawdown.

@@ -12,6 +12,34 @@ DEFAULT_FACTORS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
 MODES = ("faixa", "valores", "múltiplos")     # min/max/passo | lista | múltiplos do valor do baseline
 
 
+# Parâmetro -> (interruptor que o ativa, valor que o ativa). Variar o parâmetro com o interruptor fora de
+# jogo não muda nada: o resultado repete e a busca desperdiça tentativas.
+DEPENDS = {
+    "InpFixedLot": ("InpUseFixedLot", True),
+    "InpATRPeriod": ("InpUseTrailing", True), "InpATRMultiplier": ("InpUseTrailing", True),
+    "InpTrailATRPeriod": ("InpUseTrailing", True), "InpTrailATRMultiplier": ("InpUseTrailing", True),
+    "InpSMAFilterPeriod": ("InpUseSMAFilter", True), "InpHTFSMAPeriod": ("InpUseHTFFilter", True),
+    "InpTickVolMAPeriod": ("InpUseTickVolFilter", True), "InpTickVolMinRatio": ("InpUseTickVolFilter", True),
+    "InpStartHour": ("InpUseTradingHoursFilter", True), "InpEndHour": ("InpUseTradingHoursFilter", True),
+}
+
+
+def dependency_warnings(selected: list[str], baseline_inputs: dict) -> list[str]:
+    """Avisos para parâmetros liberados que não têm efeito porque o interruptor deles está desligado no baseline
+    e também não foi liberado para variar."""
+    out = []
+    for name in selected:
+        dep = DEPENDS.get(name)
+        if not dep or dep[0] in selected:
+            continue
+        switch, needed = dep
+        on = str(baseline_inputs.get(switch, "")).strip().lower() == "true"
+        if on != needed:
+            out.append(f"{name} só tem efeito com {switch} ligado, e no baseline ele está desligado: "
+                       f"libere também {switch}, senão {name} não muda nada.")
+    return out
+
+
 def tunable_params(expert: str) -> dict[str, str]:
     """{nome: tipo} dos inputs do EA que o `discover` pode variar (tipo = 'int' | 'float' | 'bool')."""
     mod = STRATEGIES.get(expert)

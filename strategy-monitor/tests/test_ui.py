@@ -19,12 +19,22 @@ APP = Path(__file__).resolve().parents[1] / "strategy_monitor" / "ui" / "app.py"
 
 # ---------------------------------------------------------------- lógica
 
-def test_tunable_params_exclude_identity_sizing_and_enums():
+def test_tunable_params_exclude_identity_risk_percent_and_enums():
     t = logic.tunable_params("IdxSwing91")
     assert t["InpEMAPeriod"] == "int" and t["InpTP_RMultiple"] == "float" and t["InpUseTrailing"] == "bool"
-    for banned in ("InpMagicNumber", "InpRiskPercent", "InpFixedLot", "InpUseFixedLot", "InpTimeframe"):
+    assert t["InpUseFixedLot"] == "bool" and t["InpFixedLot"] == "float"          # lote fixo liberado
+    for banned in ("InpMagicNumber", "InpRiskPercent", "InpTimeframe"):
         assert banned not in t
     assert logic.tunable_params("EaDesconhecido") == {}
+
+
+def test_dependency_warnings_flag_params_whose_switch_is_off():
+    base = {"InpUseFixedLot": "false", "InpUseTrailing": "true"}
+    w = logic.dependency_warnings(["InpFixedLot"], base)
+    assert len(w) == 1 and "InpUseFixedLot" in w[0] and "InpFixedLot" in w[0]
+    assert logic.dependency_warnings(["InpFixedLot", "InpUseFixedLot"], base) == []     # o interruptor também varia
+    assert logic.dependency_warnings(["InpATRMultiplier"], base) == []                   # trailing já está ligado
+    assert logic.dependency_warnings(["InpFixedLot"], {"InpUseFixedLot": "true"}) == []
 
 
 def test_spec_from_form_modes_and_errors():

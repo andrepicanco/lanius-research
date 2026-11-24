@@ -18,9 +18,7 @@ FORBIDDEN = {
     "InpMagicNumber": "identifica o EA",
     "InpTradeComment": "identifica o EA",
     "InpLogLevel": "não afeta o resultado",
-    "InpRiskPercent": "dimensionamento não cria edge (E[R] é invariante ao tamanho)",
-    "InpFixedLot": "dimensionamento não cria edge (E[R] é invariante ao tamanho)",
-    "InpUseFixedLot": "dimensionamento não cria edge (E[R] é invariante ao tamanho)",
+    "InpRiskPercent": "tamanho por risco %: para variar o tamanho use InpUseFixedLot + InpFixedLot",
 }
 
 

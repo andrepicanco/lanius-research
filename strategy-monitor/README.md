@@ -243,9 +243,20 @@ tentativas, gravado linha a linha) e, **só para quem passou nos testes**, um `.
 **Só varia o que você liberar.** `config/discovery.yaml` (copie de `discovery.example.yaml`) lista, por
 estratégia, os parâmetros liberados e os valores possíveis (`min/max/step`, `values` ou `factors`, que são
 multiplicadores do valor do baseline). **Esse arquivo é um exemplo que eu montei, não uma escolha sua**:
-revise os parâmetros e o teto de drawdown. Recusados de propósito: `InpMagicNumber`, `InpTradeComment`,
-`InpLogLevel` e o dimensionamento (`InpRiskPercent`, `InpFixedLot`, `InpUseFixedLot`), porque tamanho de
-posição não cria edge. `max_drawdown_pct` é obrigatório.
+revise os parâmetros e o teto de drawdown. Recusados de propósito: `InpMagicNumber`, `InpTradeComment`, `InpLogLevel` (identificam o EA ou não afetam o
+resultado) e `InpRiskPercent` (use o lote fixo para variar o tamanho). `max_drawdown_pct` é obrigatório.
+
+**Lote fixo (`InpUseFixedLot` + `InpFixedLot`).** Ativos diferentes pedem tamanhos diferentes para caber no teto de
+drawdown. Medido no DAX40 (jan–set, mesma estratégia): E[R] **−0,0351 em todos os tamanhos**, e o DD vai de 8,5%
+(risco de 0,3%) a 7,5% (lote 0,5), 1,5% (0,1) e 0,76% (0,05). Ou seja, **o lote muda o DD e o dinheiro, não o E[R]**.
+Consequências:
+
+- Libere **os dois juntos**: `InpFixedLot` só vale com `InpUseFixedLot` ligado (a tela avisa se não for assim).
+- Sob um teto de DD, reduzir o lote faz tentativas "caberem": no exemplo acima, 44 de 120 passaram o teto de 5%,
+  contra 0 antes. Isso **não é edge**: é só o tamanho certo para o teto.
+- Como o E[R] não depende do lote, o vizinho que só troca o lote **não conta** na mediana da vizinhança (repete o
+  E[R] do finalista e inflaria a robustez). O mesmo vale para qualquer parâmetro que não mude o E[R].
+- Os finalistas tendem a se parecer (a mesma estratégia com lotes diferentes disputa as vagas do `top_k`).
 
 **Método (por estratégia × ativo):**
 
@@ -274,6 +285,21 @@ finalistas. Isso confirma o achado anterior: o baseline do DAX40 foi aprovado nu
 vizinhança reduzem, não eliminam, o viés de seleção; um ativo novo usa os inputs de outro baseline como
 referência (o stop em pontos muda de escala): o `--dry-run` avisa. Antes de levar um candidato à conta, rode-o
 em forward (demo) e refaça o baseline.
+
+## Glossário
+
+| Termo                 | O que significa                                                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **R**                 | Unidade de risco de **um trade**: a distância da entrada até o stop inicial, em dinheiro (distância × volume). Um trade que ganhou o dobro do que arriscava fez +2 R; um stop cheio fez −1 R. |
+| **E[R]** (expectância) | A **média do resultado por trade, em R**. +0,125 R = em média, cada trade ganha 12,5% do que arrisca. É o objetivo do `discover` porque **não depende do tamanho do lote**: compara estratégias e ativos na mesma régua. Positivo = ganha em média; negativo = perde. |
+| **IS** (*in-sample*)  | A janela **em que a busca testa as combinações** (`is_days`, 240 dias). Aqui qualquer parâmetro pode parecer bom por sorte, porque foi escolhido olhando esses dados.                      |
+| **OOS** (*out-of-sample*) | A janela **que a busca nunca viu** (`oos_days`, 60 dias, a mais recente). Só os finalistas são avaliados nela. É a prova do "funcionou fora dos dados em que foi escolhido".          |
+| **Trechos (folds)**   | O IS partido em `folds` pedaços iguais. Um edge de verdade costuma ser positivo em mais de um pedaço; um que vive num só é suspeito.                                                       |
+| **Vizinhança**        | Mover um parâmetro por vez para o valor vizinho da grade. Se os vizinhos são ruins, o finalista é um "pico" isolado (sorte).                                                              |
+| **Referência**        | Os inputs do baseline, sem alteração, rodados na mesma janela. Um candidato precisa superá-la no OOS.                                                                                     |
+| **n**                 | Número de trades da janela. Poucos trades = resultado barulhento (veja o intervalo de confiança).                                                                                        |
+| **DD**                | Drawdown máximo do saldo de trades fechados, em % do pico. É o que o teto `max_drawdown_pct` limita.                                                                                      |
+| **Viés de seleção**   | Testar muitas combinações e ficar com a melhor infla o resultado mesmo sem edge algum. Por isso o número que vale é o do OOS, e por isso existem trechos e vizinhança.                    |
 
 ## Telegram
 
