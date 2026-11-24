@@ -10,7 +10,7 @@ min_trades: 30
 thresholds:
   confidence: 0.95          # nível do intervalo de Wilson para o win rate
   dd_fail_factor: 1.5       # FALHA se o DD% corrente > fator * DD% do baseline
-  max_drawdown_pct: null    # teto absoluto de DD% (null = sem teto). Também limita o item 2.
+  max_drawdown_pct: null    # teto absoluto de DD% no monitor (null = sem teto). O discover tem o seu proprio teto
   trades_per_month_ratio: [0.5, 2.0]   # fora dessa faixa vs baseline -> ATENCAO (comportamento mudou)
 
 # Onde ficam os relatorios gerados pelos runs (default: outputs/ no projeto)

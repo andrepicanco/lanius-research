@@ -26,7 +26,6 @@ from strategy_monitor.discovery_config import (DiscoveryConfigError, ParamSpec, 
 from strategy_monitor.engine import parity  # noqa: E402
 from strategy_monitor.engine.mt5data import DataError  # noqa: E402
 from strategy_monitor.metrics import compute_metrics  # noqa: E402
-from strategy_monitor.report import render_telegram  # noqa: E402
 from strategy_monitor.ui import logic  # noqa: E402
 from strategy_monitor.ui.html_export import BASE_COLOR, NEW_COLOR, render_monitor_html  # noqa: E402
 
@@ -135,8 +134,7 @@ def page_monitor(cfg, baselines):
                            file_name=f"monitor_{dt.date.today():%Y%m%d}.html", mime="text/html")
         if c2.button("Enviar resumo ao Telegram"):
             try:
-                from strategy_monitor.telegram import send_message
-                send_message(render_telegram([(i.report, i.metrics, i.verdict) for i in items]))
+                services.send_monitor_summary(items)
                 st.success("Resumo enviado.")
             except Exception as e:  # credencial ausente, rede
                 st.error(f"Não enviou: {e}")

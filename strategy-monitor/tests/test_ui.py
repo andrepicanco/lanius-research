@@ -137,6 +137,34 @@ def test_monitor_page_shows_verdict_comparison_and_export(app_env, monkeypatch):
     assert "IdxSwing91 · TST M12" in html and "<svg" in html and "Período novo" in html and "Baseline" in html
 
 
+def test_telegram_button_loads_the_env_file_the_cli_would_have_loaded(app_env, monkeypatch, tmp_path):
+    """Regressão: a tela não passava por main() da CLI e dizia 'faltando TELEGRAM_*' mesmo com o .env preenchido."""
+    from strategy_monitor import envfile, telegram
+    cfg, d = app_env
+    items = _items(cfg, d)
+    env = tmp_path / "t.env"
+    env.write_text("TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ_0123456\nTELEGRAM_CHAT_ID=123456789\n",
+                   encoding="utf-8")
+    monkeypatch.setattr(envfile, "DEFAULT_ENV_PATH", env)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    sent = []
+
+    class Resp:                                    # só a REDE é falsa: a checagem das credenciais é a verdadeira
+        ok = True
+    monkeypatch.setattr(telegram.requests, "post", lambda url, data, timeout: sent.append(data["text"]) or Resp())
+    monkeypatch.setattr(services, "run_monitor", lambda *a, **k: (items, []))
+    at = _apptest().run()
+    next(b for b in at.button if b.label == "Rodar monitor").click().run()
+    next(b for b in at.button if b.label == "Enviar resumo ao Telegram").click().run()
+    assert not at.exception, [e.value for e in at.error]
+    assert not at.error, [e.value for e in at.error]
+    assert any("Resumo enviado" in s.value for s in at.success)
+    assert sent and "IdxSwing91" in sent[0]
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+
 def test_discovery_page_builds_a_plan_from_the_selected_parameters(app_env):
     at = _apptest().run()
     at.sidebar.radio[0].set_value("Descoberta").run()

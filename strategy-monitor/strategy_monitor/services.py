@@ -98,6 +98,16 @@ def run_discovery(cfg: Config, settings, specs, baselines: dict[str, Report], on
     return results, out_dir, dsc.write_candidate_sets(out_dir, results)
 
 
+def send_monitor_summary(items: list[MonitorItem]) -> None:
+    """Envia o resumo ao Telegram. Carrega o `.env` AGORA (a CLI faz isso na largada; a tela não passa por lá),
+    sem sobrescrever variáveis já definidas no ambiente do Windows."""
+    from .envfile import load_env_file
+    from .report import render_telegram
+    from .telegram import send_message
+    load_env_file()
+    send_message(render_telegram([(i.report, i.metrics, i.verdict) for i in items]))
+
+
 def run_parity(cfg: Config, bases: list[Report]):
     """Roda o motor sobre o período de cada baseline e compara com os trades do Tester.
     Devolve [(Parity | None, Report do motor | None, base)]; None quando o motor não implementa a estratégia."""

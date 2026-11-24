@@ -81,6 +81,20 @@ def from_epoch(s: int) -> dt.datetime:
     return dt.datetime.fromtimestamp(int(s), _UTC).replace(tzinfo=None)
 
 
+def _is_running(exe: str | Path) -> bool:
+    """Há um processo com este executável rodando? (a API Python do MT5 pode ABRIR o terminal se ele estiver
+    fechado, o que acionaria o LiveUpdate e o pedido de administrador: por isso só conectamos a um já aberto)."""
+    import psutil
+    target = str(Path(exe).resolve()).lower()
+    for p in psutil.process_iter(["exe"]):
+        try:
+            if p.info["exe"] and str(Path(p.info["exe"]).resolve()).lower() == target:
+                return True
+        except (OSError, psutil.Error):
+            continue
+    return False
+
+
 class Mt5Source:
     """Conexao somente-leitura. `terminal_path` = terminal64.exe da instancia JA ABERTA (se nao estiver
     aberta, a API abriria uma: evite). Use como contexto: `with Mt5Source(path) as s:`."""
@@ -90,6 +104,9 @@ class Mt5Source:
         self._mt5 = None
 
     def __enter__(self):
+        if not _is_running(self.path):
+            raise DataError(f"o MT5 não está aberto ({self.path}). Abra-o e faça login antes: o motor só lê barras "
+                            "de uma instância já aberta (se fosse aberto por aqui, poderia acionar o LiveUpdate).")
         import MetaTrader5 as mt5
         if not mt5.initialize(path=self.path):
             raise DataError(f"nao consegui conectar ao MT5 em {self.path}: {mt5.last_error()}. "

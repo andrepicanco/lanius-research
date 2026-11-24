@@ -170,3 +170,12 @@ def test_breakout_enters_at_the_next_open_with_atr_stop_and_rmultiple_target():
     assert t.side == 1 and t.price_in == 105.0
     assert t.sl0 == pytest.approx(100.86, abs=0.011) and t.tp0 == pytest.approx(113.29, abs=0.011)
     assert t.reason == "tp" and t.price_out == pytest.approx(113.29, abs=0.011) and t.profit > 0
+
+
+def test_source_refuses_to_start_when_the_terminal_is_not_running(monkeypatch):
+    """A API Python poderia abrir o MT5 fechado (e com ele o LiveUpdate/UAC): o motor recusa antes de conectar."""
+    from strategy_monitor.engine import mt5data
+    monkeypatch.setattr(mt5data, "_is_running", lambda exe: False)
+    with pytest.raises(mt5data.DataError, match="não está aberto"):
+        with mt5data.Mt5Source("terminal64.exe"):
+            pass

@@ -28,7 +28,25 @@ python -m pytest tests -q
 
 `mt5.terminal_path` é o `terminal64.exe` do MT5 que você usa. **Ele precisa estar aberto e logado** quando
 você roda `monitor`, `parity` ou `discover`: o motor se conecta a essa instância pela API Python
-(`MetaTrader5`), **somente para ler** barras e a especificação do símbolo; nunca envia ordens.
+(`MetaTrader5`), **somente para ler** barras e a especificação do símbolo; nunca envia ordens. Se o MT5 estiver
+fechado, o motor **recusa** em vez de tentar abri-lo: a API Python poderia lançar o terminal (não verifiquei se
+lança), e um lançamento aciona o LiveUpdate, que pede administrador.
+
+## Configuração (`config/monitor.yaml`, ignorado pelo git)
+
+| Chave                                   | O que é                                                                                                          |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `baseline_dir`                          | Pasta dos baselines `.xlsx`. Também vale a variável `STRATEGY_MONITOR_BASELINE_DIR` ou `--baseline-dir` (esta vence). |
+| `min_trades`                            | Abaixo disso o win rate nunca passa de `ATENCAO` (padrão 30).                                                    |
+| `thresholds.confidence`                 | Nível do intervalo de Wilson (padrão 0,95).                                                                      |
+| `thresholds.dd_fail_factor`             | `FALHA` se o DD corrente passar de fator × o do baseline (padrão 1,5).                                           |
+| `thresholds.max_drawdown_pct`           | Teto absoluto de DD no **monitor** (`null` = sem teto). O `discover` tem o próprio teto, em `discovery.yaml`.    |
+| `thresholds.trades_per_month_ratio`     | Faixa aceita de trades/mês vs baseline; fora dela, `ATENCAO` (padrão 0,5 a 2).                                   |
+| `mt5.terminal_path`                     | `terminal64.exe` do MT5 que você usa (aberto e logado).                                                          |
+| `mt5.cache_dir`                         | Cache de barras (padrão `data_cache/`). **Não apague sem necessidade**: o terminal só entrega ~100 mil barras por série, e o cache guarda histórico que ele talvez não devolva mais. |
+| `outputs_dir`                           | Onde saem os resultados do `discover` (padrão `outputs/`).                                                       |
+
+Credenciais do Telegram ficam em `.env`, nunca aqui (ver "Telegram").
 
 ## Tela (front-end)
 
@@ -43,6 +61,9 @@ Streamlit local (sem administrador, só escuta em `localhost`). Faz o mesmo que 
 | **Monitor**    | Escolhe estratégias e a data final, roda o motor e mostra, por estratégia: selo de estado (ícone + texto), tabela baseline × período novo, curva de **R acumulado** dos dois, verificações e trades. Exporta **relatório HTML** autocontido e envia o resumo ao Telegram (botão explícito). |
 | **Baselines**  | Tabela dos baselines e o botão **Conferir motor (paridade)**: roda o motor no período do baseline e compara com o Tester (texto + curvas).                                                |
 | **Descoberta** | Escolhe a estratégia, os ativos (qualquer símbolo do MT5), **quais parâmetros liberar** (e a grade de cada um: faixa, lista ou múltiplos do baseline), janelas, teto de DD e validação. Mostra o plano e o tempo estimado, roda, lista finalistas com veredito e baixa `report.md`, `results.csv` e os `.set` candidatos. |
+
+O botão de Telegram lê o `.env` **no momento do clique** (a tela não passa pela largada da CLI, que é onde o arquivo
+costumava ser lido: um bug corrigido em 2026-11-24 fazia a tela acusar "faltando TELEGRAM_*" com o `.env` preenchido).
 
 Os valores iniciais da página Descoberta vêm de `config/discovery.yaml` (os "atuais"). O botão **Salvar como padrão**
 grava a seleção de volta nesse arquivo (mantém as outras estratégias; os comentários do arquivo se perdem, o modelo
@@ -267,6 +288,7 @@ TELEGRAM_CHAT_ID=...        # id NUMÉRICO do chat, não o nome do bot
 - Formato `CHAVE=valor`, sem aspas (aspas, `export`, comentários `#`, BOM e quebra de linha do Windows são tolerados).
 - **Variável já definida no ambiente do Windows vence o arquivo** (`setx TELEGRAM_BOT_TOKEN "..."` não precisa de admin).
 - Erro de credencial lista só os **nomes** que faltam; se a rede falhar, o token é mascarado, porque faz parte da URL.
+- A CLI lê o `.env` na largada; a tela, ao clicar em enviar. Variável do Windows vence o arquivo nos dois.
 - Valide com `... -m strategy_monitor telegram-test` (envia uma mensagem de teste ao seu chat).
 
 ## Racional do win rate de breakeven
@@ -298,6 +320,31 @@ excesso sobre o breakeven não é estatisticamente distinguível de zero com ess
 - **Profit factor**, **drawdown** (saldo de trades fechados) e **trades/mês** (mudança de comportamento).
 - Drawdown: FALHA se passar do teto `max_drawdown_pct` (quando configurado) ou de `dd_fail_factor` × o do
   baseline. A janela corrente costuma ser mais curta, então a comparação favorece o corrente: leia como piso.
+
+## Estrutura do código
+
+| Caminho                                | Papel                                                                                          |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `strategy_monitor/cli.py`              | Comandos (`monitor`, `baselines`, `parity`, `discover`, `telegram-test`).                       |
+| `strategy_monitor/services.py`         | Casos de uso compartilhados pela CLI e pela tela (rodar monitor, paridade, descoberta, Telegram). |
+| `strategy_monitor/engine/`             | Motor: `mt5data` (barras e cache), `core` (posição, lote, swap), `idxswing91`, `breakout_donchian1`, `indicators`, `parity`, `run`. |
+| `strategy_monitor/discovery*.py`       | Busca, validação e relatórios; `discovery_config.py` lê o `discovery.yaml`.                    |
+| `strategy_monitor/window.py`, `compare.py`, `metrics.py`, `report.py` | Corte do período julgado, semáforo, métricas, texto do resumo.   |
+| `strategy_monitor/tester_report.py`    | Leitor do `.xlsx` de baseline.                                                                 |
+| `strategy_monitor/ui/`                 | Tela (`app.py`), lógica testável (`logic.py`) e relatório HTML (`html_export.py`).             |
+| `tests/`                               | Suíte sem MT5 (`python -m pytest tests -q`). A fidelidade do motor **não** é testada aqui: é o comando `parity`. |
+
+## Problemas comuns
+
+| Mensagem / sintoma                                   | Causa e o que fazer                                                                                          |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `o MT5 não está aberto`                              | Abra o MT5 e faça login; confira `mt5.terminal_path` no `monitor.yaml`.                                      |
+| `nenhuma sub-barra ... cobre ...`                    | O terminal não tem histórico até o início da janela. Reduza `is_days` ou espere o cache crescer.             |
+| `historico insuficiente`                             | Símbolo sem barras no período; confira o nome do símbolo na sua corretora.                                   |
+| `nenhum baseline casa com ...` / `dois baselines para ...` | O ALVO não casa com nenhum nome (veja `baselines`), ou há dois `.xlsx` da mesma combinação EA × ativo × timeframe. |
+| `faltando: TELEGRAM_BOT_TOKEN ...`                   | Preencha o `.env` (ver "Telegram"). Se já preencheu e a mensagem persiste, é bug: avise.                     |
+| `TELEGRAM_CHAT_ID não parece um id de chat`          | Use o id numérico do chat, não o nome do bot.                                                                |
+| Janela julgada com `n=0` ou `[NA]`                   | Ainda não houve trades depois do corte, ou `--until` está antes dele.                                        |
 
 ## Limitações conhecidas
 
