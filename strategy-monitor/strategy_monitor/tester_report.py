@@ -1,5 +1,4 @@
-"""Lê o relatório do Strategy Tester em .xlsx (baselines do André) ou .htm/.html (o que o Tester gera
-por linha de comando). O núcleo de interpretação é o mesmo; só a leitura das linhas muda.
+"""Lê o relatório do Strategy Tester em .xlsx (os baselines do André).
 
 O que o arquivo tem (verificado em NAS100_H1.xlsx e DAX40_M12.xlsx, terminal em português):
   - cabeçalho: EA, ativo, "TF (AAAA.MM.DD - AAAA.MM.DD)", uma linha por input, empresa/moeda/
@@ -64,7 +63,7 @@ def _num(x) -> float | None:
 
 def _parse_header(rows: list[list]) -> dict:  # rows já compactadas
     # A linha do período ("H1 (AAAA.MM.DD - AAAA.MM.DD)") é a âncora: o ativo vem logo antes e o
-    # EA antes dele. Cada uma é [rótulo, valor]. Independe de linhas em branco extras (o .htm tem).
+    # EA antes dele. Cada uma é [rótulo, valor].
     pi = next((i for i, r in enumerate(rows[:20]) if r and isinstance(r[-1], str) and _PERIOD_RE.match(r[-1])), None)
     if pi is None or pi < 2:
         raise ReportFormatError("cabeçalho do relatório fora do formato esperado")
@@ -83,7 +82,7 @@ def _parse_header(rows: list[list]) -> dict:  # rows já compactadas
 
     # Depois dos inputs: empresa, moeda, depósito, alavancagem, [título Resultados],
     # qualidade do histórico, barras/ticks. Cada um é lido pelo formato, tolerando ausência.
-    deposit = history_quality = ticks = bars = None
+    deposit = history_quality = ticks = None
     for r in rows[i : i + 10]:
         if len(r) >= 2 and deposit is None and isinstance(r[-1], (int, float)) and len(r) == 2 and r[-1] >= 100:
             deposit = float(r[-1])
@@ -91,12 +90,11 @@ def _parse_header(rows: list[list]) -> dict:  # rows já compactadas
             history_quality = r[1]
         if len(r) >= 4 and isinstance(r[3], (int, float)) and ticks is None and isinstance(r[1], (int, float)):
             ticks = float(r[3])
-            bars = float(r[1])
     return dict(
         expert=expert, symbol=symbol, timeframe=tf,
         date_from=dt.datetime.strptime(d0, "%Y.%m.%d").date(),
         date_to=dt.datetime.strptime(d1, "%Y.%m.%d").date(),
-        inputs=inputs, deposit=deposit, history_quality=history_quality, ticks=ticks, bars=bars,
+        inputs=inputs, deposit=deposit, history_quality=history_quality, ticks=ticks,
     )
 
 
@@ -121,7 +119,7 @@ def _is_deal_row(r: list) -> bool:
 def _order_sl_tp(raw: tuple | list) -> tuple[float | None, float | None]:
     """S/L e T/P de uma linha da tabela Ordens, lidos por posição RELATIVA: são as duas últimas
     células antes do 2º horário da linha (o "Horário" de execução). Em branco => None. Funciona
-    igual no .xlsx (com colunas mescladas) e no .htm. Um T/P vazio não desloca o S/L."""
+    igual com colunas mescladas. Um T/P vazio não desloca o S/L."""
     vol = next(i for i, c in enumerate(raw) if isinstance(c, str) and "/" in c)
     end = next(i for i in range(vol + 1, len(raw)) if isinstance(raw[i], str) and _TIME_RE.match(raw[i]))
     seg = raw[vol + 1 : end]
@@ -130,27 +128,9 @@ def _order_sl_tp(raw: tuple | list) -> tuple[float | None, float | None]:
     return _num(seg[-2]), _num(seg[-1])
 
 
-_NUM_CELL = re.compile(r"^-?\d[\d ]*(\.\d+)?$")
-
-
-def _html_rows(path: Path) -> list[list]:
-    """Linhas do .htm como listas de células. O Tester grava UTF-16 com BOM. Células vazias viram
-    None e as numéricas viram float (separador de milhar é espaço: '10 000.00')."""
-    raw = path.read_bytes()
-    text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8", errors="replace")
-    out = []
-    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", text, re.S):
-        row = []
-        for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S):
-            v = re.sub(r"<[^>]+>", "", c).replace("&nbsp;", " ").replace(" ", " ").strip()
-            row.append(None if v == "" else (float(v.replace(" ", "")) if _NUM_CELL.match(v) else v))
-        out.append(row)
-    return out
-
-
 def read_report(path: str | Path) -> Report:
     path = Path(path)
-    raw_rows = _html_rows(path) if path.suffix.lower() in (".htm", ".html") else _rows(path)
+    raw_rows = _rows(path)
     rows = [_compact(r) for r in raw_rows]
     head = _parse_header(rows)
 

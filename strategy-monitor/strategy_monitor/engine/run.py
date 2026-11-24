@@ -63,5 +63,5 @@ def run_engine(base: Report, cache: BarCache, inputs: dict | None, from_date: dt
     trades = [_to_trade(t, base.symbol) for t in sims]
     return Report(source=f"engine:{work_tf}/{sub_tf}", expert=base.expert, symbol=base.symbol, timeframe=base.timeframe,
                   date_from=from_date, date_to=until, inputs=use, deposit=deposit or base.deposit,
-                  history_quality=None, ticks=None, trades=trades, bars=float(len(work)),
+                  history_quality=None, ticks=None, trades=trades,
                   warnings=[f"motor Python: barras {work_tf}, sub-barras {sub_tf} (aproximacao do Tester)"])

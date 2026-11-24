@@ -42,7 +42,6 @@ class Report:
     ticks: float | None
     trades: list[Trade]
     warnings: list[str] = field(default_factory=list)
-    bars: float | None = None
 
     @property
     def key(self) -> str:

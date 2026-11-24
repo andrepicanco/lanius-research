@@ -1,25 +1,23 @@
-"""Descoberta de edges: varia SÓ os parâmetros liberados e propõe candidatos. Nunca aplica nada.
+"""Descoberta de parâmetros melhores para as estratégias atuais, sobre o motor Python. Nunca aplica nada.
 
-Método (uma passada por estratégia x ticker):
-  1. Janelas: OOS = últimos `oos_days` até `until`; IS = `is_days` imediatamente antes. A busca
-     nunca vê o OOS.
-  2. Triagem no IS com o modelo rápido (1 min OHLC): a referência (inputs do baseline, inalterados)
-     mais `trials` combinações sorteadas, sem repetição, com semente fixa (reprodutível).
+Método (uma passada por estratégia x ativo):
+  1. Janelas: OOS = últimos `oos_days` até `until`; IS = `is_days` imediatamente antes. A busca nunca vê o OOS.
+  2. Busca no IS: a referência (inputs do baseline) mais `trials` combinações sorteadas, sem repetição, com
+     semente fixa (reprodutível), só nos parâmetros liberados.
   3. Objetivo: E[R] (expectância em R) com restrições: n >= min_trades_is e drawdown <= teto.
-     Tentativa fora das restrições não entra no ranking.
-  4. Os `top_k` melhores do IS (excluída a referência) vão ao OOS, junto com a referência, no
-     modelo rápido e, se configurado, no modelo exato dos baselines ("Cada tick").
-  5. Veredito do finalista, no OOS (exato quando existe): n >= min_trades_oos, DD <= teto,
-     E[R] > 0 e E[R] > E[R] da referência no mesmo OOS. Só então vira CANDIDATO.
+  4. Os `top_k` melhores do IS (fora a referência) passam por três testes que a busca nunca viu:
+       - OOS: n mínimo, DD <= teto, E[R] > 0 e E[R] > o da referência no mesmo OOS;
+       - consistência: o IS é dividido em `folds` trechos; E[R] > 0 em pelo menos `min_positive_folds`;
+       - vizinhança: cada parâmetro é movido para o valor vizinho da grade, um por vez; a MEDIANA do E[R] dos
+         vizinhos no IS precisa ser > 0 (um pico isolado cercado de vizinhos ruins é sorte, não edge).
+     Só quem passa nos três vira CANDIDATO.
 
-Por que o melhor do IS não é o resultado: com N tentativas, o máximo do IS é inflado por seleção
-mesmo sem edge nenhum (máximo esperado de N normais ~ sqrt(2 ln N) desvios). O relatório mostra
-quantos desvios o melhor do IS está acima da média das tentativas, para comparar com esse piso.
-O número honesto é o do OOS, e ele também sofre seleção (top_k finalistas), por isso `top_k` é
-pequeno e é informado.
+Por que o melhor do IS não é o resultado: com N tentativas, o máximo do IS é inflado por seleção mesmo sem edge
+nenhum (máximo esperado de N normais ~ sqrt(2 ln N) desvios). O relatório mostra quantos desvios o melhor do IS
+está acima da média das tentativas. Com centenas de tentativas isso pesa: por isso os três testes acima.
 
-Limites: um único OOS (um só regime); sem teste de vizinhança dos parâmetros; o modelo rápido
-tem viés otimista (medido em 2026-11-17: ~+0,015 R no NAS100 H1). Ver README.
+Limites: um único OOS (um só regime); o motor é uma aproximação do Tester (ver README, comando `parity`);
+a seleção também ocorre entre os `top_k` finalistas.
 """
 
 import csv
@@ -35,14 +33,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import Config
 from .discovery_config import ParamSpec, Settings, StrategySpec, fmt_value, seed_for
 from .metrics import Metrics, attach_r_multiples, compute_metrics
 from .models import Report
-from .tester_ini import write_ini
 
-# (template já com ativo/timeframe do alvo, inputs completos, from_date, until, modelo, nome) -> Report
-RunFn = Callable[[Report, dict, dt.date, dt.date, int, str], Report]
+# (baseline já com ativo/timeframe do alvo, inputs completos, de, até exclusivo) -> Report
+RunFn = Callable[[Report, dict, dt.date, dt.date], Report]
 
 _MAX_ENUM = 50_000   # acima disso, amostra por rejeição em vez de enumerar o produto
 
@@ -86,6 +82,25 @@ def sample_trials(params: list[ParamSpec], reference: dict, n: int, seed: int) -
     return [{p.name: v for p, v in zip(params, c)} for c in combos]
 
 
+def neighbors(params: list[ParamSpec], reference: dict, inputs: dict) -> list[dict]:
+    """Variações de UM parâmetro por vez para o valor vizinho da grade (±1 passo); bool inverte.
+    Cada item é {parâmetro: novo valor}. Valor fora da grade (ex.: o do baseline) é ignorado."""
+    out = []
+    for p in params:
+        grid = p.candidates(reference[p.name])
+        cur = _norm(inputs[p.name], p)
+        if cur not in grid:
+            continue
+        i = grid.index(cur)
+        if p.type == "bool":
+            out.append({p.name: grid[1 - i]})
+            continue
+        for j in (i - 1, i + 1):
+            if 0 <= j < len(grid):
+                out.append({p.name: grid[j]})
+    return out
+
+
 # ---------------------------------------------------------------- avaliação
 
 @dataclass
@@ -98,6 +113,11 @@ class Windows:
     def build(until: dt.date, s: Settings) -> "Windows":
         oos_start = until - dt.timedelta(days=s.oos_days)
         return Windows(oos_start - dt.timedelta(days=s.is_days), oos_start, until)
+
+    def folds(self, k: int) -> list[tuple[dt.date, dt.date]]:
+        span = (self.oos_start - self.is_start).days
+        edges = [self.is_start + dt.timedelta(days=round(span * i / k)) for i in range(k + 1)]
+        return list(zip(edges[:-1], edges[1:]))
 
 
 def feasibility(m: Metrics, min_trades: int, max_dd: float) -> str | None:
@@ -113,7 +133,7 @@ def feasibility(m: Metrics, min_trades: int, max_dd: float) -> str | None:
 
 @dataclass
 class Row:
-    stage: str                      # 'IS' | 'OOS-triagem' | 'OOS-exato'
+    stage: str                      # 'IS' | 'OOS' | 'FOLD' | 'VIZINHO'
     trial: int                      # 0 = referência
     changed: dict                   # parâmetros que diferem da referência
     metrics: Metrics | None
@@ -131,15 +151,29 @@ class Finalist:
     changed: dict
     inputs: dict
     is_row: Row
-    oos_screen: Row | None = None
-    oos_exact: Row | None = None
+    oos: Row | None = None
+    folds: list[Row] = field(default_factory=list)
+    neighbor_rows: list[Row] = field(default_factory=list)
     verdict: str = ""
     reasons: list[str] = field(default_factory=list)
     qualified: bool = False
 
     @property
-    def decision_row(self) -> Row | None:
-        return self.oos_exact if (self.oos_exact and self.oos_exact.metrics) else self.oos_screen
+    def positive_folds(self) -> int:
+        return sum(1 for r in self.folds if r.er is not None and r.er > 0)
+
+    @property
+    def live_neighbors(self) -> list[Row]:
+        """Vizinhos que de fato mudam o resultado. Um parâmetro "morto" (ex.: multiplicador do trailing com o
+        trailing desligado) repete o resultado do finalista e inflaria a mediana: fica de fora."""
+        m = self.is_row.metrics
+        return [r for r in self.neighbor_rows if r.metrics is not None and m is not None
+                and (r.metrics.n, round(r.metrics.net, 6)) != (m.n, round(m.net, 6))]
+
+    @property
+    def neighbor_median(self) -> float | None:
+        ers = [r.er for r in self.live_neighbors if r.er is not None]
+        return statistics.median(ers) if ers else None
 
 
 @dataclass
@@ -150,8 +184,7 @@ class TargetResult:
     timeframe: str
     windows: Windows
     reference_is: Row | None = None
-    reference_oos_screen: Row | None = None
-    reference_oos_exact: Row | None = None
+    reference_oos: Row | None = None
     rows: list[Row] = field(default_factory=list)
     finalists: list[Finalist] = field(default_factory=list)
     n_trials: int = 0
@@ -177,19 +210,16 @@ def selection_note(ers: list[float]) -> str:
 
 
 class Evaluator:
-    """Roda uma janela e devolve métricas só dos trades com entrada >= since (o aquecimento fica fora)."""
+    """Roda uma janela e devolve as métricas dos trades com entrada dentro dela."""
 
-    def __init__(self, run_fn: RunFn, template: Report, symbol: str, tf: str, settings: Settings):
-        self.run_fn, self.template, self.symbol, self.tf, self.s = run_fn, template, symbol, tf, settings
+    def __init__(self, run_fn: RunFn, template: Report, symbol: str, tf: str):
+        self.run_fn = run_fn
         self.tpl = dataclasses.replace(template, symbol=symbol, timeframe=tf)
 
-    def __call__(self, inputs: dict, since: dt.date, until: dt.date, model: int, name: str) -> Metrics:
-        from_date = since - dt.timedelta(days=self.s.warmup_days)
-        rep = self.run_fn(self.tpl, inputs, from_date, until, model, name)
+    def __call__(self, inputs: dict, since: dt.date, until: dt.date) -> Metrics:
+        rep = self.run_fn(self.tpl, inputs, since, until)
         attach_r_multiples(rep.trades)
-        cut = dt.datetime.combine(since, dt.time.min)
-        trades = [t for t in rep.trades if t.open_time >= cut]
-        return compute_metrics(trades, rep.deposit)
+        return compute_metrics(rep.trades, rep.deposit)
 
 
 def discover_target(spec: StrategySpec, symbol: str, template: Report, tf: str, s: Settings,
@@ -199,97 +229,75 @@ def discover_target(spec: StrategySpec, symbol: str, template: Report, tf: str, 
     w = Windows.build(until, s)
     res = TargetResult(label, spec.expert, symbol, tf, w)
     ref_inputs = dict(template.inputs)
+    if tf != template.timeframe:    # ativo sem baseline em outro timeframe: o input manda no motor
+        from .engine.mt5data import tf_to_mt5_enum
+        ref_inputs["InpTimeframe"] = str(tf_to_mt5_enum(tf))
     trials = sample_trials(spec.params, ref_inputs, s.trials, seed_for(s.seed, label))
     res.n_trials = len(trials)
-    ev = Evaluator(run_fn, template, symbol, tf, s)
-    tag = f"sm_disc_{spec.expert}_{symbol}"
-    total = 1 + len(trials)
+    ev = Evaluator(run_fn, template, symbol, tf)
     consecutive_errors = 0
 
-    def run_row(stage, trial, changed, inputs, since, until_, model, k=None):
+    def run_row(stage, trial, changed, inputs, since, until_) -> Row:
         nonlocal consecutive_errors
         t0 = time.monotonic()
         try:
-            m = ev(inputs, since, until_, model, f"{tag}_{stage}_{trial}")
+            m = ev(inputs, since, until_)
             consecutive_errors = 0
             row = Row(stage, trial, changed, m, seconds=time.monotonic() - t0)
             if stage == "IS":   # antes de on_row, para o motivo ir ao CSV
                 row.reason = feasibility(m, s.min_trades_is, s.max_drawdown_pct)
-        except Exception as e:  # RunnerError, relatório vazio, parse
+        except Exception as e:  # dados insuficientes, input inválido
             consecutive_errors += 1
             msg = f"{type(e).__name__}: {e}"
             res.errors.append(f"{stage} #{trial}: {msg}")
             row = Row(stage, trial, changed, None, reason=msg, seconds=time.monotonic() - t0)
-            if "pouco espaco" in msg:
-                res.aborted = "disco"
         on_row(label, row)
-        if k:
-            er = f"{row.er:+.3f}" if row.er is not None else "—"
-            n = row.metrics.n if row.metrics else 0
-            log(f"  [{k}/{total}] {stage} #{trial}: E[R]={er} n={n} ({row.seconds:.0f}s)"
-                + (f"  ERRO: {row.reason}" if row.reason and not row.metrics else ""))
         return row
 
-    # 1) IS: referência + tentativas (modelo rápido)
-    res.reference_is = run_row("IS", 0, {}, ref_inputs, w.is_start, w.oos_start, s.screen_model, 1)
+    # 1) IS: referência + tentativas
+    res.reference_is = run_row("IS", 0, {}, ref_inputs, w.is_start, w.oos_start)
     res.rows.append(res.reference_is)
-    if res.reference_is.metrics is None and consecutive_errors:
-        res.aborted = res.aborted or "referência não rodou (ativo sem dados no terminal de teste?)"
+    if res.reference_is.metrics is None:
+        res.aborted = "a referência não rodou: " + (res.errors[-1] if res.errors else "sem dados")
         return res
+    log(f"  referência no IS: E[R]={res.reference_is.er:+.3f} n={res.reference_is.metrics.n}")
     for i, ch in enumerate(trials, start=1):
-        if res.aborted:
-            break
-        inputs = {**ref_inputs, **ch}
-        row = run_row("IS", i, ch, inputs, w.is_start, w.oos_start, s.screen_model, i + 1)
+        row = run_row("IS", i, ch, {**ref_inputs, **ch}, w.is_start, w.oos_start)
         res.rows.append(row)
         if consecutive_errors >= 3:
             res.aborted = "3 erros seguidos"
+            return res
+        if i % 50 == 0:
+            log(f"  {i}/{len(trials)} tentativas")
     viable = [r for r in res.rows if r.trial > 0 and r.metrics and r.reason is None]
     res.n_feasible = len(viable)
     res.selection_note = selection_note([r.er for r in viable])
-    if res.aborted or not viable:
+    if not viable:
         return res
 
-    # 2) finalistas
+    # 2) finalistas e os três testes que a busca nunca viu
     viable.sort(key=lambda r: r.er, reverse=True)
     for r in viable[: s.top_k]:
         res.finalists.append(Finalist(r.trial, r.changed, {**ref_inputs, **r.changed}, r))
-
-    # 3) OOS: referência e finalistas, triagem e (opcional) exato
-    exact = s.confirm_model is not None and s.confirm_model != s.screen_model
-    oos_total = (1 + len(res.finalists)) * (2 if exact else 1)
-    total = 1 + len(trials) + oos_total
-    k = 1 + len(trials)
-    for model, stage in [(s.screen_model, "OOS-triagem")] + ([(s.confirm_model, "OOS-exato")] if exact else []):
-        subjects = [(0, {}, ref_inputs)] + [(f.trial, f.changed, f.inputs) for f in res.finalists]
-        for trial, changed, inputs in subjects:
-            k += 1
-            row = run_row(stage, trial, changed, inputs, w.oos_start, w.until, model, k)
-            if trial == 0:
-                if stage == "OOS-triagem":
-                    res.reference_oos_screen = row
-                else:
-                    res.reference_oos_exact = row
-            else:
-                f = next(f for f in res.finalists if f.trial == trial)
-                if stage == "OOS-triagem":
-                    f.oos_screen = row
-                else:
-                    f.oos_exact = row
-            res.rows.append(row)
-            if res.aborted:
-                return res
-    judge(res, s, exact)
+    res.reference_oos = run_row("OOS", 0, {}, ref_inputs, w.oos_start, w.until)
+    res.rows.append(res.reference_oos)
+    for f in res.finalists:
+        f.oos = run_row("OOS", f.trial, f.changed, f.inputs, w.oos_start, w.until)
+        res.rows.append(f.oos)
+        for a, b in w.folds(s.folds):
+            f.folds.append(run_row("FOLD", f.trial, f.changed, f.inputs, a, b))
+        for nb in neighbors(spec.params, ref_inputs, f.inputs):
+            f.neighbor_rows.append(run_row("VIZINHO", f.trial, nb, {**f.inputs, **nb}, w.is_start, w.oos_start))
+        res.rows += f.folds + f.neighbor_rows
+    judge(res, s)
     return res
 
 
-def judge(res: TargetResult, s: Settings, exact: bool) -> None:
-    ref_row = res.reference_oos_exact if (exact and res.reference_oos_exact and res.reference_oos_exact.metrics) \
-        else res.reference_oos_screen
-    ref_er = ref_row.er if ref_row else None
+def judge(res: TargetResult, s: Settings) -> None:
+    ref_er = res.reference_oos.er if res.reference_oos else None
     for f in res.finalists:
-        row = f.decision_row
         reasons = []
+        row = f.oos
         if row is None or row.metrics is None:
             reasons.append("OOS não rodou")
         else:
@@ -302,8 +310,14 @@ def judge(res: TargetResult, s: Settings, exact: bool) -> None:
                 reasons.append(f"DD OOS {m.max_dd_pct:.2f}% > {s.max_drawdown_pct:g}%")
             if ref_er is not None and m.expectancy_r is not None and m.expectancy_r <= ref_er:
                 reasons.append(f"não supera a referência no OOS ({m.expectancy_r:+.3f} <= {ref_er:+.3f})")
-        if exact and not (f.oos_exact and f.oos_exact.metrics):
-            reasons.append("confirmação no modelo exato falhou: resultado só da triagem")
+        if s.folds and f.positive_folds < s.min_positive_folds:
+            reasons.append(f"consistência: E[R] > 0 em {f.positive_folds}/{len(f.folds)} trechos do IS "
+                           f"(mínimo {s.min_positive_folds})")
+        nm = f.neighbor_median
+        if nm is None and f.neighbor_rows:
+            reasons.append("vizinhança: nenhum vizinho muda o resultado, robustez não avaliável")
+        elif nm is not None and nm <= 0:
+            reasons.append(f"vizinhança: mediana do E[R] dos vizinhos = {nm:+.3f} <= 0 (pico isolado)")
         f.reasons = reasons
         f.qualified = not reasons
         f.verdict = "CANDIDATO" if f.qualified else "REPROVADO: " + "; ".join(reasons)
@@ -331,7 +345,7 @@ class ResultsCsv:
                          m.n if m else "", fmt(m.win_rate if m else None), fmt(m.breakeven_wr if m else None),
                          fmt(m.expectancy_r if m else None), fmt(m.profit_factor if m else None),
                          fmt(m.max_dd_pct if m else None, 2), fmt(m.net if m else None, 2),
-                         r.reason or "", round(r.seconds, 1)])
+                         r.reason or "", round(r.seconds, 2)])
         self.f.flush()
 
     def close(self) -> None:
@@ -354,13 +368,10 @@ def _changed(ch: dict, ref: dict) -> str:
 
 def write_report(path: Path, results: list[TargetResult], s: Settings, template_inputs: dict[str, dict],
                  until: dt.date) -> None:
-    exact = s.confirm_model is not None and s.confirm_model != s.screen_model
-    models = {0: "Cada tick", 1: "1 min OHLC", 2: "Open prices", 4: "Ticks reais"}
-    L = [f"# Descoberta de edges — {dt.datetime.now():%Y-%m-%d %H:%M}", "",
+    L = [f"# Descoberta de parâmetros — {dt.datetime.now():%Y-%m-%d %H:%M}", "",
          f"Objetivo: **E[R]** com teto de drawdown **{s.max_drawdown_pct:g}%**, n mínimo {s.min_trades_is} (IS) / "
-         f"{s.min_trades_oos} (OOS). Triagem: {models.get(s.screen_model, s.screen_model)}"
-         + (f"; confirmação: {models.get(s.confirm_model, s.confirm_model)}." if exact else ".")
-         + f" Semente {s.seed}. Janela final até {until} (exclusivo).", "",
+         f"{s.min_trades_oos} (OOS). Motor Python (aproximação do Tester). Semente {s.seed}. "
+         f"Janela final até {until} (exclusivo).", "",
          "> **Nada foi aplicado.** Candidatos são propostas para você revisar; o número que vale é o do OOS, "
          "e ele também sofre seleção (top_k finalistas).", ""]
     for r in results:
@@ -381,20 +392,19 @@ def write_report(path: Path, results: list[TargetResult], s: Settings, template_
         if r.selection_note:
             L += [f"Seleção: {r.selection_note}.", ""]
         if r.reference_is:
-            head = "| | parâmetros alterados | IS E[R] | OOS triagem | " + ("OOS exato | " if exact else "") + "veredito |"
-            L += [head, "|" + "---|" * (head.count("|") - 1)]
-            ref_cells = f"| ref | (baseline) | {_cell(r.reference_is)} | {_cell(r.reference_oos_screen)} | " \
-                        + (f"{_cell(r.reference_oos_exact)} | " if exact else "") + "— |"
-            L.append(ref_cells)
+            L += ["| | parâmetros alterados | IS E[R] | trechos do IS > 0 | mediana vizinhos | OOS E[R] | veredito |",
+                  "|---|---|---|---|---|---|---|",
+                  f"| ref | (baseline) | {_cell(r.reference_is)} | — | — | {_cell(r.reference_oos)} | — |"]
             for i, f in enumerate(r.finalists, 1):
-                L.append(f"| #{i} | {_changed(f.changed, ref)} | {_cell(f.is_row)} | {_cell(f.oos_screen)} | "
-                         + (f"{_cell(f.oos_exact)} | " if exact else "") + f"{f.verdict} |")
+                nm = f"{f.neighbor_median:+.3f}" if f.neighbor_median is not None else "—"
+                L.append(f"| #{i} | {_changed(f.changed, ref)} | {_cell(f.is_row)} | "
+                         f"{f.positive_folds}/{len(f.folds)} | {nm} | {_cell(f.oos)} | {f.verdict} |")
             L.append("")
     L += ["## Limites", "",
-          "- Um único OOS (um só regime de mercado); sem teste de vizinhança dos parâmetros.",
-          "- A triagem usa o modelo rápido, com viés otimista (medido +0,015 R no NAS100 H1).",
-          "- Janela de OOS curta: poucos trades, intervalo de confiança largo.",
-          "- Antes de levar um candidato para a conta, rode-o por mais tempo em forward (demo)."]
+          "- Um único OOS (um só regime de mercado): poucos trades e intervalo de confiança largo.",
+          "- O motor aproxima o Tester (ver `parity`); em ativo sem baseline essa fidelidade não foi medida.",
+          "- Os testes de consistência e vizinhança reduzem, mas não eliminam, o viés de seleção.",
+          "- Antes de levar um candidato para a conta, rode-o por mais tempo em forward (demo) e refaça o baseline."]
     path.write_text("\n".join(L) + "\n", encoding="utf-8")
 
 
@@ -408,9 +418,8 @@ def render_summary(results: list[TargetResult]) -> str:
         lines.append(f"{r.label}: {len(cands)} candidato(s) de {len(r.finalists)} finalista(s); "
                      f"{r.n_feasible}/{r.n_trials} tentativas viaveis no IS")
         for i, f in enumerate(r.finalists, 1):
-            row = f.decision_row
             lines.append(f"  #{i} {'CANDIDATO' if f.qualified else 'reprovado'}: IS E[R] {f.is_row.er:+.3f} -> "
-                         f"OOS {_cell(row)}" + ("" if f.qualified else f" ({'; '.join(f.reasons)})"))
+                         f"OOS {_cell(f.oos)}" + ("" if f.qualified else f" ({'; '.join(f.reasons)})"))
     return "\n".join(lines)
 
 
@@ -423,28 +432,20 @@ def write_candidate_sets(out_dir: Path, results: list[TargetResult]) -> list[Pat
                 continue
             p = out_dir / "candidates" / f"{r.expert}_{r.symbol}_{r.timeframe}_cand{i}.set"
             p.parent.mkdir(parents=True, exist_ok=True)
-            write_ini(p, "\r\n".join(f"{k}={v}" for k, v in f.inputs.items()) + "\r\n")
+            text = "\r\n".join(f"{k}={v}" for k, v in f.inputs.items()) + "\r\n"
+            p.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
             written.append(p)
     return written
 
 
 # ---------------------------------------------------------------- execução real
 
-def make_run_fn(cfg: Config, tmp_dir: Path, log: Callable[[str], None] = lambda m: None) -> RunFn:
-    """RunFn que usa o terminal portátil. O relatório de cada tentativa é lido e APAGADO (disco)."""
-    from .runner import RunnerConfig, run_and_read
-    from .tester_ini import TesterSettings
-    te = cfg.tester
+def make_run_fn(cache) -> RunFn:
+    """RunFn do motor Python sobre o cache de barras do MT5 (BarCache já conectado)."""
+    from .engine.run import run_engine
 
-    def run_fn(tpl, inputs, from_date, until, model, name):
-        rc = RunnerConfig(te.terminal_dir, te.timeout_minutes * 60,
-                          TesterSettings(model=model, execution_mode=te.execution_mode), te.experts,
-                          te.min_free_gb, te.max_terminal_mb, 1)
-        try:
-            return run_and_read(tpl, rc, until, name, tmp_dir, inputs=inputs, from_date=from_date)
-        finally:
-            for f in tmp_dir.glob(f"{name}*"):
-                f.unlink(missing_ok=True)
+    def run_fn(tpl: Report, inputs: dict, from_date: dt.date, until: dt.date) -> Report:
+        return run_engine(tpl, cache, inputs, from_date, until)
 
     return run_fn
 
@@ -473,7 +474,6 @@ def plan(specs: list[StrategySpec], s: Settings, baselines: dict[str, Report], o
     """O que seria executado (para --dry-run e para estimar tempo)."""
     out = []
     w = Windows.build(until, s)
-    exact = s.confirm_model is not None and s.confirm_model != s.screen_model
     for spec in specs:
         for sym in spec.tickers:
             if only and only.lower() not in f"{spec.expert} {sym}".lower():
@@ -482,7 +482,8 @@ def plan(specs: list[StrategySpec], s: Settings, baselines: dict[str, Report], o
             grids = [p.candidates(tpl.inputs.get(p.name, "1")) for p in spec.params]
             space = math.prod(len(g) for g in grids)
             n = min(s.trials, max(space - 1, 0))
-            runs = 1 + n + (1 + s.top_k) * (2 if exact else 1)
+            per_finalist = 1 + s.folds + 2 * len(spec.params)          # OOS + trechos + vizinhos (≈2 por parâmetro)
+            runs = 1 + n + 1 + s.top_k * per_finalist
             out.append(dict(spec=spec, symbol=sym, template=tpl, timeframe=tf, space=space, trials=n,
                             runs=runs, own=tpl.symbol == sym, windows=w))
     return out

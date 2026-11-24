@@ -13,19 +13,6 @@ thresholds:
   max_drawdown_pct: null    # teto absoluto de DD% (null = sem teto). Também limita o item 2.
   trades_per_month_ratio: [0.5, 2.0]   # fora dessa faixa vs baseline -> ATENCAO (comportamento mudou)
 
-# Terminal PORTATIL dedicado a backtests (copia do programa, aberta com /portable e logada uma vez
-# numa conta demo). NUNCA aponte para o terminal que opera: com ele aberto o /config e ignorado.
-tester:
-  terminal_dir: 'C:\Users\15339\Lanius-MT5-Tester'
-  timeout_minutes: 30
-  model: 0              # 0 = Cada tick (modelagem dos baselines)
-  execution_mode: 20    # latencia em ms (a dos baselines)
-  min_free_gb: 1.0      # recusa rodar com menos que isso livre no disco
-  max_terminal_mb: 500  # acima disso apaga o historico baixado depois do run (volta a baixar)
-  warmup_days: 30       # dias antes do fim do baseline para aquecer indicadores no run
-  keep_reports: 10      # relatorios mantidos por baseline em outputs/
-  experts: {}           # so se a pasta do EA nao tiver o mesmo nome dele, ex.: IdxSwing91: 'Outra\IdxSwing91.ex5'
-
 # Onde ficam os relatorios gerados pelos runs (default: outputs/ no projeto)
 # outputs_dir: 'C:\...'
 

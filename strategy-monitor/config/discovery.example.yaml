@@ -2,16 +2,15 @@
 # Nada aqui altera um EA: o resultado e um relatorio + .set candidato em outputs/discovery/<data>/.
 
 settings:
-  screen_model: 1          # triagem: 1 = 1 min OHLC (~20 s/teste; 0 = Cada tick, exato e lento)
-  confirm_model: 0         # finalistas reconfirmados no modelo dos baselines; null = nao confirmar
-  is_days: 240             # janela de busca (treino)
-  oos_days: 45             # janela de teste: a busca NUNCA a ve. Maximo ~45-60 d para o modelo exato no NAS100 H1
-  warmup_days: 30
-  trials: 30               # combinacoes sorteadas por ativo (alem da referencia)
-  top_k: 3                 # finalistas que vao ao OOS (informe-os: tambem ha selecao no OOS)
+  is_days: 240             # janela de busca (treino). A sub-barra do motor se ajusta ao que o terminal alcanca
+  oos_days: 60             # janela de teste: a busca NUNCA a ve
+  trials: 300              # combinacoes sorteadas por ativo (alem da referencia). ~0,1 s cada
+  top_k: 5                 # finalistas que passam pelos testes de OOS, consistencia e vizinhanca
   seed: 42                 # mesma semente = mesmas combinacoes
   min_trades_is: 30
   min_trades_oos: 10
+  folds: 3                 # trechos do IS para o teste de consistencia (0 = nao testar)
+  min_positive_folds: 2    # E[R] > 0 em pelo menos tantos trechos
   max_drawdown_pct: 5.0    # OBRIGATORIO: teto de drawdown (saldo fechado) em %
 
 strategies:

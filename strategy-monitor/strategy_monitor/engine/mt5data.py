@@ -64,6 +64,15 @@ def tf_from_mt5_enum(value: int | str, default: str) -> str:
     return name
 
 
+def tf_to_mt5_enum(name: str) -> int:
+    """Inverso de `tf_from_mt5_enum` ('M12' -> 12, 'H1' -> 16385, 'D1' -> 16408)."""
+    if name not in TF_MIN:
+        raise DataError(f"timeframe {name} nao suportado")
+    if name == "D1":
+        return 16408
+    return int(name[1:]) if name[0] == "M" else 16384 + int(name[1:])
+
+
 def epoch(d: dt.datetime) -> int:
     return int(d.replace(tzinfo=_UTC).timestamp())
 
@@ -134,6 +143,8 @@ class BarCache:
         self.dir = Path(cache_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.source = source
+        self._head: dict[tuple[str, str], int] = {}   # inicio ja pedido ao terminal, por serie (neste processo)
+        self._tail: dict[tuple[str, str], bool] = {}  # rabo (barras novas) ja atualizado, por serie
 
     def _file(self, symbol: str, tf: str) -> Path:
         return self.dir / f"{symbol}_{tf}.npz"
@@ -155,15 +166,28 @@ class BarCache:
         np.savez_compressed(self._file(symbol, tf), bars=both)
         return both
 
-    def get(self, symbol: str, tf: str, start: dt.datetime, end: dt.datetime, refresh: bool = True) -> np.ndarray:
+    def get(self, symbol: str, tf: str, start: dt.datetime, end: dt.datetime) -> np.ndarray:
+        """Barras com abertura em [start, end). Vai ao MT5 (uma vez por processo e serie, para nao repetir a
+        cada backtest) so para completar o INICIO (cache comeca depois de `start`) e o FIM (barras novas)."""
         cached = self._load(symbol, tf)
         s, e = epoch(start), epoch(end)
-        step = TF_MIN[tf] * 60
-        # o terminal so tem barras ate agora: uma janela que termina no futuro/hoje pede o rabo de novo
-        need_fetch = (not len(cached)) or cached["time"][0] > s + 5 * 86400 or (refresh and cached["time"][-1] + 3 * step < min(e, epoch(dt.datetime.now(_UTC).replace(tzinfo=None))) - 3 * 86400)
-        if need_fetch and self.source is not None:
-            lo = start if (not len(cached) or cached["time"][0] > s) else from_epoch(int(cached["time"][-1]) - 86400)
-            cached = self._merge_save(symbol, tf, cached, self.source.rates(symbol, tf, lo, end))
+        if self.source is not None:
+            key = (symbol, tf)
+            if not len(cached):
+                cached = self._merge_save(symbol, tf, cached, self.source.rates(symbol, tf, start, end))
+                self._head[key], self._tail[key] = s, True
+            else:
+                if cached["time"][0] > s + 5 * 86400 and s < self._head.get(key, cached["time"][0]):
+                    head = self.source.rates(symbol, tf, start, from_epoch(int(cached["time"][0])))
+                    cached = self._merge_save(symbol, tf, cached, head)
+                    self._head[key] = s          # ja tentei: o terminal pode simplesmente nao ter mais historia
+                if key not in self._tail:
+                    now = epoch(dt.datetime.now(_UTC).replace(tzinfo=None))
+                    if cached["time"][-1] < now - 6 * 3600:
+                        tail = self.source.rates(symbol, tf, from_epoch(int(cached["time"][-1]) - 86400),
+                                                 from_epoch(now + 86400))
+                        cached = self._merge_save(symbol, tf, cached, tail)
+                    self._tail[key] = True
         return cached[(cached["time"] >= s) & (cached["time"] < e)]
 
     def spec(self, symbol: str) -> SymbolSpec:

@@ -74,16 +74,15 @@ def fmt_value(v: float, type_: str, step: float | None = None) -> str:
 
 @dataclass
 class Settings:
-    screen_model: int = 1            # 1 = 1 min OHLC (rápido)
-    confirm_model: int | None = 0    # modelo exato dos baselines; None = não confirmar
     is_days: int = 240
-    oos_days: int = 45
-    warmup_days: int = 30
-    trials: int = 30
-    top_k: int = 3
+    oos_days: int = 60
+    trials: int = 300
+    top_k: int = 5
     seed: int = 42
     min_trades_is: int = 30
     min_trades_oos: int = 10
+    folds: int = 3                          # trechos do IS para o teste de consistência (0 = não testar)
+    min_positive_folds: int = 2
     max_drawdown_pct: float | None = None   # obrigatorio: sem default de proposito
 
 

@@ -20,19 +20,6 @@ class Thresholds:
 
 
 @dataclass
-class TesterCfg:
-    terminal_dir: Path | None = None      # terminal PORTATIL dedicado a backtests
-    timeout_minutes: int = 30
-    model: int = 0                        # 0 = Cada tick (o dos baselines)
-    execution_mode: int = 20              # latencia em ms (a dos baselines)
-    experts: dict = field(default_factory=dict)   # EA -> caminho relativo a MQL5/Experts
-    min_free_gb: float = 1.0
-    max_terminal_mb: float = 500.0
-    keep_reports: int = 10
-    warmup_days: int = 30
-
-
-@dataclass
 class Mt5Cfg:
     """Instancia ABERTA do MT5 de onde o motor Python le barras (somente leitura) e onde guarda o cache."""
     terminal_path: Path | None = None
@@ -45,7 +32,6 @@ class Config:
     baseline_dir: Path | None = None
     min_trades: int = 30
     thresholds: Thresholds = field(default_factory=Thresholds)
-    tester: TesterCfg = field(default_factory=TesterCfg)
     outputs_dir: Path = Path(__file__).resolve().parent.parent / "outputs"
 
 
@@ -63,18 +49,6 @@ def load_config(path: str | Path | None = None, baseline_dir: str | Path | None 
             dd_fail_factor=float(t.get("dd_fail_factor", 1.5)),
             max_drawdown_pct=t.get("max_drawdown_pct"),
             trades_per_month_ratio=tuple(t.get("trades_per_month_ratio", (0.5, 2.0))),
-        )
-        te = raw.get("tester") or {}
-        cfg.tester = TesterCfg(
-            terminal_dir=Path(te["terminal_dir"]) if te.get("terminal_dir") else None,
-            timeout_minutes=int(te.get("timeout_minutes", 30)),
-            model=int(te.get("model", 0)),
-            execution_mode=int(te.get("execution_mode", 20)),
-            experts=dict(te.get("experts") or {}),
-            min_free_gb=float(te.get("min_free_gb", 1.0)),
-            max_terminal_mb=float(te.get("max_terminal_mb", 500.0)),
-            keep_reports=int(te.get("keep_reports", 10)),
-            warmup_days=int(te.get("warmup_days", 30)),
         )
         m = raw.get("mt5") or {}
         if m.get("terminal_path"):
