@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .discovery_config import ParamSpec, Settings, StrategySpec, fmt_value, seed_for
+from .engine.mt5data import ConnectionLost
 from .metrics import Metrics, attach_r_multiples, compute_metrics
 from .models import Report
 
@@ -131,9 +132,70 @@ def feasibility(m: Metrics, min_trades: int, max_dd: float) -> str | None:
     return None
 
 
+SIZING_PARAMS = ("InpUseFixedLot", "InpFixedLot", "InpRiskPercent")      # o tamanho NÃO entra na busca quando `size_last` está ligado
+DEFAULT_LOT_BOUNDS = (0.01, 0.01, 100.0)               # (mínimo, passo, máximo) quando o motor não informa
+
+
+@dataclass
+class SizeResult:
+    lot: float | None               # maior lote fixo que cabe no teto de DD; None = não cabe
+    dd: float | None                # DD% com esse lote (ou com o lote mínimo, se não coube)
+    n: int = 0
+    reason: str | None = None
+
+
+def fit_lot(ev, inputs: dict, since: dt.date, until: dt.date, cap: float,
+            bounds: tuple[float, float, float] = DEFAULT_LOT_BOUNDS, max_runs: int = 24) -> SizeResult:
+    """Maior lote fixo cujo drawdown na janela [since, until) fica <= `cap` (%). O lote escala o DD quase
+    linearmente e não muda o E[R], então: mede no lote mínimo, estima o lote pela proporção, confirma e refina
+    por bisseção no passo de volume. `ev(inputs, since, until)` devolve as métricas."""
+    vmin, vstep, vmax = bounds
+    kmin, kmax = max(1, round(vmin / vstep)), max(1, round(vmax / vstep))
+    seen: dict[int, Metrics] = {}
+
+    def run(k: int) -> Metrics:
+        if k not in seen:
+            seen[k] = ev({**inputs, "InpUseFixedLot": "true", "InpFixedLot": fmt_value(k * vstep, "float", vstep)},
+                         since, until)
+        return seen[k]
+
+    def fits(k: int) -> bool:
+        m = run(k)
+        return m.n > 0 and m.max_dd_pct <= cap
+
+    m0 = run(kmin)
+    if m0.n == 0:
+        return SizeResult(None, None, 0, "sem trades na janela")
+    if not fits(kmin):
+        return SizeResult(None, m0.max_dd_pct, m0.n,
+                          f"nem com o lote mínimo ({kmin * vstep:g}) o DD cabe: {m0.max_dd_pct:.2f}% > {cap:g}%")
+    lo, hi = kmin, None                                    # lo: maior que cabe; hi: menor que não cabe
+    k = min(kmax, max(kmin, int(kmin * cap / max(m0.max_dd_pct, 1e-9) * 0.98)))
+    if k > kmin:
+        if fits(k):
+            lo = k
+        else:
+            hi = k
+    while hi is None and lo < kmax and len(seen) < max_runs:
+        nk = min(kmax, max(lo + 1, int(lo * 1.3)))
+        if fits(nk):
+            lo = nk
+        else:
+            hi = nk
+    while hi is not None and hi - lo > 1 and len(seen) < max_runs:
+        mid = (lo + hi) // 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid
+    m = run(lo)
+    note = f"o teto não restringe até o lote máximo ({kmax * vstep:g})" if lo == kmax else None
+    return SizeResult(round(lo * vstep, 8), m.max_dd_pct, m.n, note)
+
+
 @dataclass
 class Row:
-    stage: str                      # 'IS' | 'OOS' | 'FOLD' | 'VIZINHO'
+    stage: str                      # 'IS' | 'OOS' | 'FOLD' | 'VIZINHO' | 'LOTE'
     trial: int                      # 0 = referência
     changed: dict                   # parâmetros que diferem da referência
     metrics: Metrics | None
@@ -154,9 +216,17 @@ class Finalist:
     oos: Row | None = None
     folds: list[Row] = field(default_factory=list)
     neighbor_rows: list[Row] = field(default_factory=list)
+    size: SizeResult | None = None
     verdict: str = ""
     reasons: list[str] = field(default_factory=list)
     qualified: bool = False
+
+    @property
+    def set_inputs(self) -> dict:
+        """Inputs do arquivo .set candidato: os do finalista, com o lote dimensionado quando houve."""
+        if self.size and self.size.lot:
+            return {**self.inputs, "InpUseFixedLot": "true", "InpFixedLot": fmt_value(self.size.lot, "float", 0.01)}
+        return self.inputs
 
     @property
     def positive_folds(self) -> int:
@@ -186,6 +256,7 @@ class TargetResult:
     windows: Windows
     reference_is: Row | None = None
     reference_oos: Row | None = None
+    reference_size: SizeResult | None = None
     rows: list[Row] = field(default_factory=list)
     finalists: list[Finalist] = field(default_factory=list)
     n_trials: int = 0
@@ -226,7 +297,8 @@ class Evaluator:
 
 def discover_target(spec: StrategySpec, symbol: str, template: Report, tf: str, s: Settings,
                     until: dt.date, run_fn: RunFn, log: Callable[[str], None] = lambda m: None,
-                    on_row: Callable[[str, Row], None] = lambda label, r: None) -> TargetResult:
+                    on_row: Callable[[str, Row], None] = lambda label, r: None,
+                    lot_bounds: Callable[[str], tuple[float, float, float]] | None = None) -> TargetResult:
     label = f"{spec.expert} · {symbol} {tf}"
     w = Windows.build(until, s)
     res = TargetResult(label, spec.expert, symbol, tf, w)
@@ -234,7 +306,13 @@ def discover_target(spec: StrategySpec, symbol: str, template: Report, tf: str, 
     if tf != template.timeframe:    # ativo sem baseline em outro timeframe: o input manda no motor
         from .engine.mt5data import tf_to_mt5_enum
         ref_inputs["InpTimeframe"] = str(tf_to_mt5_enum(tf))
-    trials = sample_trials(spec.params, ref_inputs, s.trials, seed_for(s.seed, label))
+    # Com `size_last`, o lote fica FORA da busca (não muda o E[R]) e o teto de DD só vale no dimensionamento final.
+    search_params = [p for p in spec.params if not (s.size_last and p.name in SIZING_PARAMS)]
+    if not search_params:
+        raise DiscoveryError("nenhum parâmetro para a busca: com o dimensionamento no final, o lote "
+                             "(InpUseFixedLot/InpFixedLot) não entra na busca; libere outro parâmetro")
+    dd_cap_in_search = float("inf") if s.size_last else s.max_drawdown_pct
+    trials = sample_trials(search_params, ref_inputs, s.trials, seed_for(s.seed, label))
     res.n_trials = len(trials)
     res.ref_inputs = ref_inputs
     ev = Evaluator(run_fn, template, symbol, tf)
@@ -248,8 +326,10 @@ def discover_target(spec: StrategySpec, symbol: str, template: Report, tf: str, 
             consecutive_errors = 0
             row = Row(stage, trial, changed, m, seconds=time.monotonic() - t0)
             if stage == "IS":   # antes de on_row, para o motivo ir ao CSV
-                row.reason = feasibility(m, s.min_trades_is, s.max_drawdown_pct)
-        except Exception as e:  # dados insuficientes, input inválido
+                row.reason = feasibility(m, s.min_trades_is, dd_cap_in_search)
+        except ConnectionLost:
+            raise                # conexão caiu: seguir só geraria erros em cascata; a execução para
+        except Exception as e:   # dados insuficientes, input inválido
             consecutive_errors += 1
             msg = f"{type(e).__name__}: {e}"
             res.errors.append(f"{stage} #{trial}: {msg}")
@@ -289,9 +369,24 @@ def discover_target(spec: StrategySpec, symbol: str, template: Report, tf: str, 
         res.rows.append(f.oos)
         for a, b in w.folds(s.folds):
             f.folds.append(run_row("FOLD", f.trial, f.changed, f.inputs, a, b))
-        for nb in neighbors(spec.params, ref_inputs, f.inputs):
+        for nb in neighbors(search_params, ref_inputs, f.inputs):
             f.neighbor_rows.append(run_row("VIZINHO", f.trial, nb, {**f.inputs, **nb}, w.is_start, w.oos_start))
         res.rows += f.folds + f.neighbor_rows
+    if s.size_last:
+        bounds = (lot_bounds(symbol) if lot_bounds else None) or DEFAULT_LOT_BOUNDS
+        log("  dimensionando o lote (maior que cabe no teto de DD)…")
+
+        def sized(trial, changed, inputs) -> SizeResult:
+            sz = fit_lot(ev, inputs, w.is_start, w.until, s.max_drawdown_pct, bounds)
+            if sz.lot:     # uma linha no CSV com o resultado no lote escolhido
+                fin = {**inputs, "InpUseFixedLot": "true", "InpFixedLot": fmt_value(sz.lot, "float", bounds[1])}
+                res.rows.append(run_row("LOTE", trial, {**changed, "InpFixedLot": fin["InpFixedLot"]}, fin,
+                                        w.is_start, w.until))
+            return sz
+
+        res.reference_size = sized(0, {}, ref_inputs)
+        for f in res.finalists:
+            f.size = sized(f.trial, f.changed, f.inputs)
     judge(res, s)
     return res
 
@@ -309,10 +404,12 @@ def judge(res: TargetResult, s: Settings) -> None:
                 reasons.append(f"OOS n={m.n} < {s.min_trades_oos}")
             if m.expectancy_r is None or m.expectancy_r <= 0:
                 reasons.append("E[R] no OOS <= 0")
-            if m.max_dd_pct > s.max_drawdown_pct:
+            if not s.size_last and m.max_dd_pct > s.max_drawdown_pct:
                 reasons.append(f"DD OOS {m.max_dd_pct:.2f}% > {s.max_drawdown_pct:g}%")
             if ref_er is not None and m.expectancy_r is not None and m.expectancy_r <= ref_er:
                 reasons.append(f"não supera a referência no OOS ({m.expectancy_r:+.3f} <= {ref_er:+.3f})")
+        if s.size_last and (f.size is None or f.size.lot is None):
+            reasons.append("lote: " + (f.size.reason if f.size and f.size.reason else "não foi possível dimensionar"))
         if s.folds and f.positive_folds < s.min_positive_folds:
             reasons.append(f"consistência: E[R] > 0 em {f.positive_folds}/{len(f.folds)} trechos do IS "
                            f"(mínimo {s.min_positive_folds})")
@@ -365,6 +462,14 @@ def _cell(r: Row | None) -> str:
     return f"{er} (n={m.n}, DD {m.max_dd_pct:.1f}%)"
 
 
+def _lot_cell(sz: SizeResult | None) -> str:
+    if sz is None:
+        return "—"
+    if sz.lot is None:
+        return "não cabe"
+    return f"{sz.lot:g} (DD {sz.dd:.1f}%)"
+
+
 def _changed(ch: dict, ref: dict) -> str:
     return ", ".join(f"{k}={v} (era {ref.get(k, '?')})" for k, v in ch.items()) or "(baseline)"
 
@@ -395,14 +500,19 @@ def write_report(path: Path, results: list[TargetResult], s: Settings, template_
         if r.selection_note:
             L += [f"Seleção: {r.selection_note}.", ""]
         if r.reference_is:
-            L += ["| | parâmetros alterados | IS E[R] | trechos do IS > 0 | mediana vizinhos | OOS E[R] | veredito |",
-                  "|---|---|---|---|---|---|---|",
-                  f"| ref | (baseline) | {_cell(r.reference_is)} | — | — | {_cell(r.reference_oos)} | — |"]
+            L += ["| | parâmetros alterados | IS E[R] | trechos do IS > 0 | mediana vizinhos | OOS E[R] | lote no teto de DD | veredito |",
+                  "|---|---|---|---|---|---|---|---|",
+                  f"| ref | (baseline) | {_cell(r.reference_is)} | — | — | {_cell(r.reference_oos)} | "
+                  f"{_lot_cell(r.reference_size)} | — |"]
             for i, f in enumerate(r.finalists, 1):
                 nm = f"{f.neighbor_median:+.3f}" if f.neighbor_median is not None else "—"
                 L.append(f"| #{i} | {_changed(f.changed, ref)} | {_cell(f.is_row)} | "
-                         f"{f.positive_folds}/{len(f.folds)} | {nm} | {_cell(f.oos)} | {f.verdict} |")
+                         f"{f.positive_folds}/{len(f.folds)} | {nm} | {_cell(f.oos)} | {_lot_cell(f.size)} | {f.verdict} |")
             L.append("")
+    if s.size_last:
+        L += ["O lote **não entra na busca** (não muda o E[R]): para a referência e cada finalista, a coluna "
+              f"*lote no teto de DD* é o maior lote fixo cujo drawdown fica ≤ {s.max_drawdown_pct:g}% na janela inteira "
+              "(IS + OOS). O `.set` candidato já traz esse lote (`InpUseFixedLot=true`).", ""]
     L += ["## Limites", "",
           "- Um único OOS (um só regime de mercado): poucos trades e intervalo de confiança largo.",
           "- O motor aproxima o Tester (ver `parity`); em ativo sem baseline essa fidelidade não foi medida.",
@@ -422,7 +532,7 @@ def render_summary(results: list[TargetResult]) -> str:
                      f"{r.n_feasible}/{r.n_trials} tentativas viaveis no IS")
         for i, f in enumerate(r.finalists, 1):
             lines.append(f"  #{i} {'CANDIDATO' if f.qualified else 'reprovado'}: IS E[R] {f.is_row.er:+.3f} -> "
-                         f"OOS {_cell(f.oos)}" + ("" if f.qualified else f" ({'; '.join(f.reasons)})"))
+                         f"OOS {_cell(f.oos)}" + (f" | lote {_lot_cell(f.size)}" if f.size else "") + ("" if f.qualified else f" ({'; '.join(f.reasons)})"))
     return "\n".join(lines)
 
 
@@ -435,7 +545,7 @@ def write_candidate_sets(out_dir: Path, results: list[TargetResult]) -> list[Pat
                 continue
             p = out_dir / "candidates" / f"{r.expert}_{r.symbol}_{r.timeframe}_cand{i}.set"
             p.parent.mkdir(parents=True, exist_ok=True)
-            text = "\r\n".join(f"{k}={v}" for k, v in f.inputs.items()) + "\r\n"
+            text = "\r\n".join(f"{k}={v}" for k, v in f.set_inputs.items()) + "\r\n"
             p.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
             written.append(p)
     return written
@@ -486,7 +596,7 @@ def plan(specs: list[StrategySpec], s: Settings, baselines: dict[str, Report], o
             space = math.prod(len(g) for g in grids)
             n = min(s.trials, max(space - 1, 0))
             per_finalist = 1 + s.folds + 2 * len(spec.params)          # OOS + trechos + vizinhos (≈2 por parâmetro)
-            runs = 1 + n + 1 + s.top_k * per_finalist
+            runs = 1 + n + 1 + s.top_k * per_finalist + ((1 + s.top_k) * 12 if s.size_last else 0)
             out.append(dict(spec=spec, symbol=sym, template=tpl, timeframe=tf, space=space, trials=n,
                             runs=runs, own=tpl.symbol == sym, windows=w))
     return out

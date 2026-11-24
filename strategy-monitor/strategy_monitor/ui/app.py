@@ -27,6 +27,7 @@ from strategy_monitor.engine import parity  # noqa: E402
 from strategy_monitor.engine.mt5data import DataError  # noqa: E402
 from strategy_monitor.metrics import compute_metrics  # noqa: E402
 from strategy_monitor.ui import logic  # noqa: E402
+from strategy_monitor.ui.glossary import GLOSSARY, tip  # noqa: E402
 from strategy_monitor.ui.html_export import BASE_COLOR, NEW_COLOR, render_monitor_html  # noqa: E402
 
 ICON = {OK: "🟢", ATENCAO: "🟡", FALHA: "🔴", NA: "⚪"}          # sempre acompanhado do texto do estado
@@ -79,10 +80,48 @@ def metrics_table(base, cur) -> pd.DataFrame:
 
 # ---------------------------------------------------------------- páginas
 
+def glossary_popover(*terms: str):
+    """Botão que abre o significado dos termos (os mesmos textos dos tooltips)."""
+    with st.popover("O que significam estes termos?"):
+        for t in (terms or tuple(GLOSSARY)):
+            st.markdown(f"**{t}** — {GLOSSARY[t]}")
+
+
+def symbols_expander(cfg, tickers_key: str):
+    """Ativos que o MT5 aberto oferece, com filtro, e atalho para adicioná-los aos ativos da busca."""
+    with st.expander("Ativos disponíveis no MT5 aberto"):
+        st.caption("Lista lida do terminal aberto (somente leitura). O nome do símbolo é o que vai no campo de ativos.")
+        if st.button("Carregar / atualizar a lista", key="load_symbols"):
+            try:
+                st.session_state["symbols"] = services.list_symbols(cfg)
+            except (DataError, services.BusyError) as e:
+                st.error(str(e))
+        syms = st.session_state.get("symbols")
+        if not syms:
+            st.info("Clique em **Carregar / atualizar a lista** (o MT5 precisa estar aberto e logado).")
+            return
+        q = st.text_input("Filtrar (nome, descrição ou grupo)", key="sym_filter").strip().lower()
+        df = pd.DataFrame(syms, columns=["Símbolo", "Descrição", "Grupo"])
+        if q:
+            df = df[df.apply(lambda r: q in " ".join(r).lower(), axis=1)]
+        st.caption(f"{len(df)} de {len(syms)} símbolos")
+        st.dataframe(df, hide_index=True, width="stretch", height=260)
+
+        def add_picked():
+            cur = [t.strip() for t in st.session_state.get(tickers_key, "").split(",") if t.strip()]
+            picked = [p for p in st.session_state.get("sym_pick", []) if p not in cur]
+            st.session_state[tickers_key] = ", ".join(cur + picked)
+            st.session_state["sym_pick"] = []
+
+        st.multiselect("Escolher para a busca", df["Símbolo"].tolist()[:500], key="sym_pick")
+        st.button("Adicionar aos ativos da busca", on_click=add_picked)
+
+
 def page_monitor(cfg, baselines):
     st.header("Monitor")
     st.caption("Roda o motor Python só no período posterior ao baseline e compara com ele. "
                "Precisa do MT5 aberto e logado (leitura de barras).")
+    glossary_popover("Baseline", "R", "E[R]", "Breakeven", "IC95", "PF", "DD", "n")
     labels = {b.label: b for b in baselines.values()}
     c1, c2 = st.columns([3, 1])
     chosen = c1.multiselect("Estratégias", list(labels), default=list(labels))
@@ -91,7 +130,7 @@ def page_monitor(cfg, baselines):
         with st.status("Rodando o motor…", expanded=True) as status:
             try:
                 items, problems = services.run_monitor(cfg, [labels[c] for c in chosen], until, log=st.write)
-            except DataError as e:
+            except (DataError, services.BusyError) as e:
                 status.update(label="Erro", state="error")
                 st.error(str(e))
                 return
@@ -196,11 +235,15 @@ def page_discovery(cfg, baselines):
     mine = [b for b in baselines.values() if b.expert == expert]
     d_spec = next((s for s in d_specs if s.expert == expert), None)
     own_symbols = [b.symbol for b in mine]
+    glossary_popover("IS", "OOS", "R", "E[R]", "Trechos", "Vizinhança", "Referência", "Lote no teto", "DD", "n",
+                     "Viés de seleção")
+    tickers_key = f"tickers_{expert}"
     tickers_txt = st.text_input(
-        "Ativos (separados por vírgula)", value=", ".join(d_spec.tickers if d_spec else own_symbols),
+        "Ativos (separados por vírgula)", key=tickers_key, value=", ".join(d_spec.tickers if d_spec else own_symbols),
         help="Qualquer símbolo do seu MT5. Ativo sem baseline usa os inputs de outro baseline como referência "
              "(não validada nesse ativo; stops em pontos mudam de escala).")
     tickers = [t.strip() for t in tickers_txt.split(",") if t.strip()]
+    symbols_expander(cfg, tickers_key)
     template = timeframe = None
     new_assets = [t for t in tickers if t not in own_symbols]
     if new_assets:
@@ -258,26 +301,46 @@ def page_discovery(cfg, baselines):
 
     st.subheader("Janelas e validação")
     c = st.columns(4)
-    is_days = c[0].number_input("Dias de busca (IS)", 30, 1500, d_settings.is_days, step=10)
-    oos_days = c[1].number_input("Dias de teste (OOS)", 14, 400, d_settings.oos_days, step=5,
-                                 help="A busca nunca vê esta janela.")
-    trials = c[2].number_input("Tentativas", 10, 5000, d_settings.trials, step=10)
-    top_k = c[3].number_input("Finalistas", 1, 30, d_settings.top_k)
+    is_days = c[0].number_input("Dias de busca (IS)", 30, 1500, d_settings.is_days, step=10, help=tip("IS"))
+    oos_days = c[1].number_input("Dias de teste (OOS)", 14, 400, d_settings.oos_days, step=5, help=tip("OOS"))
+    trials = c[2].number_input("Tentativas", 10, 5000, d_settings.trials, step=10,
+                               help="Quantas combinações de parâmetros sorteadas são testadas no IS (além da "
+                                    "referência). Mais tentativas = mais viés de seleção.\n\n" + tip("Viés de seleção"))
+    top_k = c[3].number_input("Finalistas", 1, 30, d_settings.top_k,
+                              help="Os melhores do IS que passam pelos testes de OOS, trechos e vizinhança. "
+                                   "Também há seleção entre eles: mantenha pequeno.")
     c = st.columns(4)
     dd = c[0].number_input("Teto de drawdown (%)", 0.5, 100.0, float(d_settings.max_drawdown_pct or 5.0), step=0.5,
-                           help="Tentativa acima do teto sai do ranking. Obrigatório.")
+                           help="Obrigatório. Sem dimensionamento no final, tentativa acima do teto sai do ranking; "
+                                "com ele, o teto define o lote.\n\n" + tip("DD"))
     folds = c[1].number_input("Trechos de consistência", 0, 8, d_settings.folds,
-                              help="O IS é dividido nesse nº de trechos; 0 desliga o teste.")
-    min_pos = c[2].number_input("Trechos com E[R] > 0 (mín.)", 0, 8, d_settings.min_positive_folds)
-    seed = c[3].number_input("Semente", 0, 10**6, d_settings.seed)
-    c = st.columns(3)
-    min_is = c[0].number_input("Trades mínimos no IS", 5, 500, d_settings.min_trades_is)
-    min_oos = c[1].number_input("Trades mínimos no OOS", 3, 500, d_settings.min_trades_oos)
-    until = c[2].date_input("Até (exclusivo)", value=dt.date.today())
+                              help="0 desliga o teste.\n\n" + tip("Trechos"))
+    min_pos = c[2].number_input("Trechos com E[R] > 0 (mín.)", 0, 8, d_settings.min_positive_folds,
+                                help="Em quantos dos trechos acima o E[R] precisa ser positivo.\n\n" + tip("E[R]"))
+    seed = c[3].number_input("Semente", 0, 10**6, d_settings.seed,
+                             help="Mesma semente = mesmas combinações sorteadas (resultado reproduzível).")
+    c = st.columns(4)
+    min_is = c[0].number_input("Trades mínimos no IS", 5, 500, d_settings.min_trades_is,
+                               help="Tentativa com menos trades que isso sai do ranking.\n\n" + tip("n"))
+    min_oos = c[1].number_input("Trades mínimos no OOS", 3, 500, d_settings.min_trades_oos,
+                                help="Finalista com menos trades que isso no OOS é reprovado.\n\n" + tip("n"))
+    until = c[2].date_input("Até (exclusivo)", value=dt.date.today(),
+                            help="Fim da janela de teste (o dia indicado não entra). O OOS termina aqui.")
+    size_last = c[3].checkbox("Dimensionar o lote no final", value=d_settings.size_last,
+                              help="Liga: a busca ignora o lote (e o teto de DD); no fim, calcula o maior lote fixo "
+                                   "que cabe no teto de DD, para a referência e cada finalista.\n\n" + tip("Lote no teto"))
+    if size_last and any(n in dsc.SIZING_PARAMS for n in selected):
+        st.info("Com o dimensionamento no final ligado, os parâmetros de lote/risco liberados acima são **ignorados na "
+                "busca**: o lote é calculado no fim.")
+    if size_last and not any(p.name not in dsc.SIZING_PARAMS for p in specs):
+        st.warning("Libere pelo menos um parâmetro que não seja de lote/risco: com o dimensionamento no final, "
+                   "o lote não entra na busca.")
+        return
 
     settings = Settings(is_days=int(is_days), oos_days=int(oos_days), trials=int(trials), top_k=int(top_k),
                         seed=int(seed), min_trades_is=int(min_is), min_trades_oos=int(min_oos), folds=int(folds),
-                        min_positive_folds=int(min_pos), max_drawdown_pct=float(dd))
+                        min_positive_folds=int(min_pos), max_drawdown_pct=float(dd),
+                        size_last=bool(size_last))
     try:
         spec = logic.build_strategy_spec(expert, tickers, specs, template, timeframe)
     except ValueError as e:
@@ -301,11 +364,13 @@ def page_discovery(cfg, baselines):
     if c2.button("Salvar como padrão (discovery.yaml)"):
         logic.save_discovery_yaml(DISCOVERY_YAML, settings, spec)
         st.success("Padrão salvo. A seleção de outras estratégias no arquivo foi mantida.")
+    st.caption("Enquanto a descoberta roda, não mude de página nem mexa em outros controles: a tela interrompe a "
+               "execução. Os resultados parciais ficam no `results.csv`.")
     if c1.button("Rodar descoberta", type="primary"):
         with st.status("Rodando a descoberta…", expanded=True) as status:
             try:
                 results, out_dir, sets = services.run_discovery(cfg, settings, [spec], baselines, None, until, log=st.write)
-            except (DataError, dsc.DiscoveryError) as e:
+            except (DataError, dsc.DiscoveryError, services.BusyError) as e:
                 status.update(label="Erro", state="error")
                 st.error(str(e))
                 return
@@ -336,14 +401,25 @@ def show_discovery(res):
         fmt = lambda row: "—" if row is None or row.metrics is None else (
             f"{row.er:+.3f} (n={row.metrics.n}, DD {row.metrics.max_dd_pct:.1f}%)" if row.er is not None else "n/d")
         rows = [{"": "ref", "Parâmetros alterados": "(baseline)", "IS E[R]": fmt(r.reference_is),
-                 "Trechos > 0": "—", "Mediana vizinhos": "—", "OOS E[R]": fmt(r.reference_oos), "Veredito": "—"}]
+                 "Trechos > 0": "—", "Mediana vizinhos": "—", "OOS E[R]": fmt(r.reference_oos),
+                 "Lote no teto de DD": dsc._lot_cell(r.reference_size), "Veredito": "—"}]
         for i, f in enumerate(r.finalists, 1):
             nm = f.neighbor_median
             rows.append({"": f"#{i}", "Parâmetros alterados": dsc._changed(f.changed, r.ref_inputs),
                          "IS E[R]": fmt(f.is_row), "Trechos > 0": f"{f.positive_folds}/{len(f.folds)}",
                          "Mediana vizinhos": "—" if nm is None else f"{nm:+.3f}", "OOS E[R]": fmt(f.oos),
+                         "Lote no teto de DD": dsc._lot_cell(f.size),
                          "Veredito": ("✅ " if f.qualified else "❌ ") + f.verdict})
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        cc = st.column_config
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", column_config={
+            "IS E[R]": cc.TextColumn(help=tip("IS", "E[R]")),
+            "Trechos > 0": cc.TextColumn(help=tip("Trechos")),
+            "Mediana vizinhos": cc.TextColumn(help=tip("Vizinhança")),
+            "OOS E[R]": cc.TextColumn(help=tip("OOS", "E[R]")),
+            "Lote no teto de DD": cc.TextColumn(help=tip("Lote no teto")),
+            "Veredito": cc.TextColumn(help="CANDIDATO só se passa em OOS, trechos, vizinhança e lote."),
+            "Parâmetros alterados": cc.TextColumn(help=tip("Referência")),
+        })
     st.caption(f"Arquivos em `{out_dir}`")
     c = st.columns(3)
     rep, csv_ = out_dir / "report.md", out_dir / "results.csv"

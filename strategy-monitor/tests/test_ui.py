@@ -9,6 +9,7 @@ import yaml
 from conftest import make_xlsx, trade_spec
 from strategy_monitor import services
 from strategy_monitor.config import load_config
+from strategy_monitor.engine import mt5data
 from strategy_monitor.discovery_config import ParamSpec, Settings, load_discovery_config
 from strategy_monitor.tester_report import read_report
 from strategy_monitor.ui import logic
@@ -22,8 +23,8 @@ APP = Path(__file__).resolve().parents[1] / "strategy_monitor" / "ui" / "app.py"
 def test_tunable_params_exclude_identity_risk_percent_and_enums():
     t = logic.tunable_params("IdxSwing91")
     assert t["InpEMAPeriod"] == "int" and t["InpTP_RMultiple"] == "float" and t["InpUseTrailing"] == "bool"
-    assert t["InpUseFixedLot"] == "bool" and t["InpFixedLot"] == "float"          # lote fixo liberado
-    for banned in ("InpMagicNumber", "InpRiskPercent", "InpTimeframe"):
+    assert t["InpUseFixedLot"] == "bool" and t["InpFixedLot"] == "float" and t["InpRiskPercent"] == "float"
+    for banned in ("InpMagicNumber", "InpTradeComment", "InpLogLevel", "InpTimeframe"):
         assert banned not in t
     assert logic.tunable_params("EaDesconhecido") == {}
 
@@ -35,6 +36,9 @@ def test_dependency_warnings_flag_params_whose_switch_is_off():
     assert logic.dependency_warnings(["InpFixedLot", "InpUseFixedLot"], base) == []     # o interruptor também varia
     assert logic.dependency_warnings(["InpATRMultiplier"], base) == []                   # trailing já está ligado
     assert logic.dependency_warnings(["InpFixedLot"], {"InpUseFixedLot": "true"}) == []
+    # InpRiskPercent vale com o lote fixo DESLIGADO (o inverso)
+    assert len(logic.dependency_warnings(["InpRiskPercent"], {"InpUseFixedLot": "true"})) == 1
+    assert logic.dependency_warnings(["InpRiskPercent"], {"InpUseFixedLot": "false"}) == []
 
 
 def test_spec_from_form_modes_and_errors():
@@ -183,3 +187,37 @@ def test_discovery_page_builds_a_plan_from_the_selected_parameters(app_env):
     assert not at.exception
     assert any("backtests" in c.value for c in at.caption)                    # plano com o total estimado
     assert not at.error
+
+
+def test_discovery_page_lists_mt5_symbols_adds_them_and_explains_the_terms(app_env, monkeypatch):
+    monkeypatch.setattr(services, "list_symbols", lambda cfg: [("DAX40", "Germany 40", "Indices/DAX40"),
+                                                               ("XAUUSD", "Gold", "Metals/XAUUSD")])
+    at = _apptest().run()
+    at.sidebar.radio[0].set_value("Descoberta").run()
+    assert not at.exception
+    # tooltips com o significado dos termos
+    help_of = {n.label: (n.help or "") for n in at.number_input}
+    assert "In-sample" in help_of["Dias de busca (IS)"] and "Out-of-sample" in help_of["Dias de teste (OOS)"]
+    assert "R" in help_of["Trechos com E[R] > 0 (mín.)"] and "Expectância" in help_of["Trechos com E[R] > 0 (mín.)"]
+    box = next(c for c in at.checkbox if c.label == "Dimensionar o lote no final")
+    assert "maior lote" in box.help
+    # lista de ativos: só depois do clique (não exige MT5 ao abrir a página)
+    assert not any("Símbolo" in getattr(d.value, "columns", []) for d in at.dataframe)
+    next(b for b in at.button if b.label == "Carregar / atualizar a lista").click().run()
+    assert not at.exception
+    assert any("DAX40" in list(d.value["Símbolo"]) for d in at.dataframe if "Símbolo" in d.value.columns)
+    # atalho: escolher na lista e adicionar ao campo de ativos
+    key = "tickers_IdxSwing91"
+    at.multiselect(key="sym_pick").set_value(["XAUUSD"]).run()
+    next(b for b in at.button if b.label == "Adicionar aos ativos da busca").click().run()
+    assert not at.exception and "XAUUSD" in at.text_input(key=key).value
+
+
+def test_discovery_page_shows_the_error_when_mt5_is_closed(app_env, monkeypatch):
+    def closed(cfg):
+        raise mt5data.DataError("o MT5 não está aberto")
+    monkeypatch.setattr(services, "list_symbols", closed)
+    at = _apptest().run()
+    at.sidebar.radio[0].set_value("Descoberta").run()
+    next(b for b in at.button if b.label == "Carregar / atualizar a lista").click().run()
+    assert not at.exception and any("não está aberto" in e.value for e in at.error)

@@ -18,7 +18,6 @@ FORBIDDEN = {
     "InpMagicNumber": "identifica o EA",
     "InpTradeComment": "identifica o EA",
     "InpLogLevel": "não afeta o resultado",
-    "InpRiskPercent": "tamanho por risco %: para variar o tamanho use InpUseFixedLot + InpFixedLot",
 }
 
 
@@ -81,6 +80,7 @@ class Settings:
     min_trades_oos: int = 10
     folds: int = 3                          # trechos do IS para o teste de consistência (0 = não testar)
     min_positive_folds: int = 2
+    size_last: bool = True                  # busca sem o lote; no fim acha o maior lote que cabe no teto de DD
     max_drawdown_pct: float | None = None   # obrigatorio: sem default de proposito
 
 

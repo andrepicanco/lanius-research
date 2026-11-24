@@ -15,7 +15,7 @@ MODES = ("faixa", "valores", "múltiplos")     # min/max/passo | lista | múltip
 # Parâmetro -> (interruptor que o ativa, valor que o ativa). Variar o parâmetro com o interruptor fora de
 # jogo não muda nada: o resultado repete e a busca desperdiça tentativas.
 DEPENDS = {
-    "InpFixedLot": ("InpUseFixedLot", True),
+    "InpFixedLot": ("InpUseFixedLot", True), "InpRiskPercent": ("InpUseFixedLot", False),
     "InpATRPeriod": ("InpUseTrailing", True), "InpATRMultiplier": ("InpUseTrailing", True),
     "InpTrailATRPeriod": ("InpUseTrailing", True), "InpTrailATRMultiplier": ("InpUseTrailing", True),
     "InpSMAFilterPeriod": ("InpUseSMAFilter", True), "InpHTFSMAPeriod": ("InpUseHTFFilter", True),

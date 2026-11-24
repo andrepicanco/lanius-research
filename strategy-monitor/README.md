@@ -60,7 +60,7 @@ Streamlit local (sem administrador, só escuta em `localhost`). Faz o mesmo que 
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Monitor**    | Escolhe estratégias e a data final, roda o motor e mostra, por estratégia: selo de estado (ícone + texto), tabela baseline × período novo, curva de **R acumulado** dos dois, verificações e trades. Exporta **relatório HTML** autocontido e envia o resumo ao Telegram (botão explícito). |
 | **Baselines**  | Tabela dos baselines e o botão **Conferir motor (paridade)**: roda o motor no período do baseline e compara com o Tester (texto + curvas).                                                |
-| **Descoberta** | Escolhe a estratégia, os ativos (qualquer símbolo do MT5), **quais parâmetros liberar** (e a grade de cada um: faixa, lista ou múltiplos do baseline), janelas, teto de DD e validação. Mostra o plano e o tempo estimado, roda, lista finalistas com veredito e baixa `report.md`, `results.csv` e os `.set` candidatos. |
+| **Descoberta** | Escolhe a estratégia, os ativos (com a **lista de ativos do MT5 aberto**, filtrável, e um atalho para adicioná-los), **quais parâmetros liberar** (e a grade de cada um: faixa, lista ou múltiplos do baseline), janelas, teto de DD e se o lote é **dimensionado no final**. Mostra o plano e o tempo estimado, roda, lista finalistas com veredito e lote, e baixa `report.md`, `results.csv` e os `.set` candidatos. Todo campo tem **tooltip** com o significado dos termos (IS, OOS, E[R]…), e há um botão de glossário no alto das páginas. |
 
 O botão de Telegram lê o `.env` **no momento do clique** (a tela não passa pela largada da CLI, que é onde o arquivo
 costumava ser lido: um bug corrigido em 2026-11-24 fazia a tela acusar "faltando TELEGRAM_*" com o `.env` preenchido).
@@ -243,33 +243,40 @@ tentativas, gravado linha a linha) e, **só para quem passou nos testes**, um `.
 **Só varia o que você liberar.** `config/discovery.yaml` (copie de `discovery.example.yaml`) lista, por
 estratégia, os parâmetros liberados e os valores possíveis (`min/max/step`, `values` ou `factors`, que são
 multiplicadores do valor do baseline). **Esse arquivo é um exemplo que eu montei, não uma escolha sua**:
-revise os parâmetros e o teto de drawdown. Recusados de propósito: `InpMagicNumber`, `InpTradeComment`, `InpLogLevel` (identificam o EA ou não afetam o
-resultado) e `InpRiskPercent` (use o lote fixo para variar o tamanho). `max_drawdown_pct` é obrigatório.
+revise os parâmetros e o teto de drawdown. Recusados de propósito: `InpMagicNumber`, `InpTradeComment` e `InpLogLevel` (identificam o EA ou não afetam o
+resultado). `max_drawdown_pct` é obrigatório.
 
-**Lote fixo (`InpUseFixedLot` + `InpFixedLot`).** Ativos diferentes pedem tamanhos diferentes para caber no teto de
-drawdown. Medido no DAX40 (jan–set, mesma estratégia): E[R] **−0,0351 em todos os tamanhos**, e o DD vai de 8,5%
-(risco de 0,3%) a 7,5% (lote 0,5), 1,5% (0,1) e 0,76% (0,05). Ou seja, **o lote muda o DD e o dinheiro, não o E[R]**.
-Consequências:
+**Tamanho da posição: `InpUseFixedLot`, `InpFixedLot`, `InpRiskPercent`.** Ativos diferentes pedem tamanhos diferentes
+para caber no teto de drawdown. Medido no DAX40 (jan–set, mesma estratégia): E[R] **−0,0351 em todos os tamanhos**, e o DD
+vai de 8,5% (risco de 0,3%) a 7,5% (lote 0,5), 1,5% (0,1) e 0,76% (0,05). **O lote muda o DD e o dinheiro, não o E[R].**
 
-- Libere **os dois juntos**: `InpFixedLot` só vale com `InpUseFixedLot` ligado (a tela avisa se não for assim).
-- Sob um teto de DD, reduzir o lote faz tentativas "caberem": no exemplo acima, 44 de 120 passaram o teto de 5%,
-  contra 0 antes. Isso **não é edge**: é só o tamanho certo para o teto.
-- Como o E[R] não depende do lote, o vizinho que só troca o lote **não conta** na mediana da vizinhança (repete o
-  E[R] do finalista e inflaria a robustez). O mesmo vale para qualquer parâmetro que não mude o E[R].
-- Os finalistas tendem a se parecer (a mesma estratégia com lotes diferentes disputa as vagas do `top_k`).
+- **Dimensionar no final (padrão, `size_last: true`).** A busca **ignora o tamanho** (os três parâmetros acima, mesmo que
+  liberados) e também o teto de DD: ranqueia só por E[R]. No fim, para a **referência** e cada **finalista**, acha por
+  bisseção o **maior lote fixo cujo DD fica ≤ teto** na janela inteira (IS + OOS). O relatório mostra a coluna *lote no teto
+  de DD*, o `results.csv` ganha linhas `LOTE` e o `.set` candidato já sai com `InpUseFixedLot=true` e esse lote. Se nem o lote
+  mínimo cabe no teto, o finalista é reprovado ("nem com o lote mínimo…").
+  Exemplo real (DAX40, 120 tentativas): a referência cabe no teto de 5% com **lote 0,33** (DD 5,0%), contra 8,5% com o
+  risco de 0,3%; todas as 120 tentativas foram viáveis (antes do dimensionamento no final, 0).
+- **Sem dimensionar no final (`size_last: false`).** O tamanho entra na busca como qualquer parâmetro e o teto de DD
+  filtra tentativas no IS. Então reduzir o lote faz tentativas "caberem" (isso **não é edge**), os finalistas tendem a ser a
+  mesma estratégia com lotes diferentes, e o vizinho que só troca o lote **não conta** na vizinhança (repete o E[R]).
+- `InpFixedLot` só vale com `InpUseFixedLot` ligado e `InpRiskPercent` só com ele desligado; a tela avisa quando um
+  parâmetro depende de um interruptor desligado no baseline.
 
 **Método (por estratégia × ativo):**
 
 1. **Janelas.** OOS = últimos `oos_days` (60) até `--until`; IS = `is_days` (240) imediatamente antes. A busca
    **nunca vê o OOS**.
 2. **Busca no IS:** a referência (inputs do baseline) mais `trials` (300) combinações sorteadas, sem repetição,
-   com semente fixa. Objetivo: maximizar **E[R]**, com n ≥ `min_trades_is` e drawdown ≤ teto.
-3. Os `top_k` (5) melhores passam por três testes que a busca nunca viu. **CANDIDATO** só quem passa nos três:
-   - **OOS:** n mínimo, DD ≤ teto, E[R] > 0 e maior que o da referência no mesmo OOS;
+   com semente fixa. Objetivo: maximizar **E[R]**, com n ≥ `min_trades_is` (e drawdown ≤ teto, **só quando o lote não é dimensionado no final**).
+3. Os `top_k` (5) melhores passam por testes que a busca nunca viu. **CANDIDATO** só quem passa em todos:
+   - **OOS:** n mínimo, E[R] > 0 e maior que o da referência no mesmo OOS (e DD ≤ teto, se o lote não for
+     dimensionado no final);
    - **consistência:** o IS é dividido em `folds` (3) trechos; E[R] > 0 em pelo menos `min_positive_folds` (2);
    - **vizinhança:** cada parâmetro vai ao valor vizinho da grade, um por vez; a **mediana** do E[R] dos
      vizinhos no IS precisa ser > 0. Pico isolado é sorte. Parâmetro sem efeito (ex.: multiplicador do trailing
      com o trailing desligado) repete o resultado do finalista e é descartado dessa conta.
+   - **lote** (com `size_last`): precisa existir um lote que caiba no teto de DD.
 
 **O viés de seleção é o risco principal.** Com N tentativas, o melhor do IS é inflado mesmo sem edge algum (o
 máximo esperado de N ruídos normais é ~√(2 ln N) desvios acima da média). O relatório compara o melhor com
@@ -299,6 +306,7 @@ em forward (demo) e refaça o baseline.
 | **Referência**        | Os inputs do baseline, sem alteração, rodados na mesma janela. Um candidato precisa superá-la no OOS.                                                                                     |
 | **n**                 | Número de trades da janela. Poucos trades = resultado barulhento (veja o intervalo de confiança).                                                                                        |
 | **DD**                | Drawdown máximo do saldo de trades fechados, em % do pico. É o que o teto `max_drawdown_pct` limita.                                                                                      |
+| **Lote no teto de DD** | Com `size_last`, o maior lote fixo cujo drawdown fica dentro do teto na janela inteira. Muda o DD e o dinheiro, não o E[R].                                  |
 | **Viés de seleção**   | Testar muitas combinações e ficar com a melhor infla o resultado mesmo sem edge algum. Por isso o número que vale é o do OOS, e por isso existem trechos e vizinhança.                    |
 
 ## Telegram
@@ -365,6 +373,8 @@ excesso sobre o breakeven não é estatisticamente distinguível de zero com ess
 | Mensagem / sintoma                                   | Causa e o que fazer                                                                                          |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `o MT5 não está aberto`                              | Abra o MT5 e faça login; confira `mt5.terminal_path` no `monitor.yaml`.                                      |
+| `a conexão com o MT5 caiu` (ou `No IPC connection`)    | O MT5 fechou, ou outra ação encerrou a conexão no meio. Reabra o MT5 e rode de novo; o `results.csv` guarda o que já rodou. (Bug de 2026-11-24, corrigido: a conexão agora é compartilhada e só fecha na última saída.) |
+| `já existe uma execução em andamento`                | Só uma execução longa por vez. Espere terminar, e não mude de página nem mexa em outros controles durante a descoberta. |
 | `nenhuma sub-barra ... cobre ...`                    | O terminal não tem histórico até o início da janela. Reduza `is_days` ou espere o cache crescer.             |
 | `historico insuficiente`                             | Símbolo sem barras no período; confira o nome do símbolo na sua corretora.                                   |
 | `nenhum baseline casa com ...` / `dois baselines para ...` | O ALVO não casa com nenhum nome (veja `baselines`), ou há dois `.xlsx` da mesma combinação EA × ativo × timeframe. |

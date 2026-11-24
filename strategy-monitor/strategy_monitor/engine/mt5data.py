@@ -12,6 +12,7 @@ O cache cresce a cada uso, entao o historico disponivel aumenta com o tempo, mes
 
 import datetime as dt
 import json
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -95,34 +96,66 @@ def _is_running(exe: str | Path) -> bool:
     return False
 
 
+class ConnectionLost(DataError):
+    """A conexão com o MT5 caiu no meio da execução (ex.: outra ação do mesmo processo a fechou, ou o terminal
+    foi fechado). Não adianta tentar as demais combinações: a execução para."""
+
+
+# A biblioteca MetaTrader5 tem UMA conexão global por processo. O Streamlit atende várias ações no mesmo processo:
+# se cada uma abre e fecha a conexão por conta própria, a que termina primeiro derruba a que ainda roda
+# (reproduzido em 2026-11-24: 'No IPC connection'). Por isso a conexão é contada: a última saída é que encerra.
+_CONN_LOCK = threading.RLock()
+_CONN_COUNT = 0
+
+
 class Mt5Source:
     """Conexao somente-leitura. `terminal_path` = terminal64.exe da instancia JA ABERTA (se nao estiver
-    aberta, a API abriria uma: evite). Use como contexto: `with Mt5Source(path) as s:`."""
+    aberta, a API abriria uma: evite). Use como contexto: `with Mt5Source(path) as s:`. Pode ser aninhado e usado
+    por varias threads: a conexao so e encerrada quando o ultimo uso sai."""
 
     def __init__(self, terminal_path: str | Path):
         self.path = str(terminal_path)
         self._mt5 = None
 
     def __enter__(self):
+        global _CONN_COUNT
         if not _is_running(self.path):
             raise DataError(f"o MT5 não está aberto ({self.path}). Abra-o e faça login antes: o motor só lê barras "
                             "de uma instância já aberta (se fosse aberto por aqui, poderia acionar o LiveUpdate).")
         import MetaTrader5 as mt5
-        if not mt5.initialize(path=self.path):
-            raise DataError(f"nao consegui conectar ao MT5 em {self.path}: {mt5.last_error()}. "
-                            "A instancia precisa estar aberta e logada.")
+        with _CONN_LOCK:
+            if _CONN_COUNT == 0 and not mt5.initialize(path=self.path):
+                raise DataError(f"nao consegui conectar ao MT5 em {self.path}: {mt5.last_error()}. "
+                                "A instancia precisa estar aberta e logada.")
+            _CONN_COUNT += 1
         self._mt5 = mt5
         return self
 
     def __exit__(self, *exc):
-        if self._mt5 is not None:
-            self._mt5.shutdown()
+        global _CONN_COUNT
+        if self._mt5 is None:
+            return
+        with _CONN_LOCK:
+            _CONN_COUNT -= 1
+            if _CONN_COUNT == 0:
+                self._mt5.shutdown()
+        self._mt5 = None
+
+    def _terminal(self):
+        """terminal_info() ou ConnectionLost: sem isso, uma conexão caída vira erros confusos mais adiante
+        ('símbolo não existe', 'histórico insuficiente')."""
+        info = self._mt5.terminal_info()
+        if info is None:
+            raise ConnectionLost(f"a conexão com o MT5 caiu ({self._mt5.last_error()}). Confira se o MT5 continua "
+                                 "aberto e logado e rode de novo; o que já foi calculado ficou no results.csv.")
+        return info
 
     @property
     def maxbars(self) -> int:
-        return int(self._mt5.terminal_info().maxbars)
+        return int(self._terminal().maxbars)
 
     def symbol_spec(self, symbol: str) -> SymbolSpec:
+        self._terminal()
         self._mt5.symbol_select(symbol, True)
         si = self._mt5.symbol_info(symbol)
         if si is None:
@@ -131,9 +164,18 @@ class Mt5Source:
                           si.volume_step, si.volume_max, max(si.trade_stops_level, si.trade_freeze_level),
                           si.swap_long, si.swap_short, si.swap_rollover3days, si.swap_mode)
 
+    def symbols(self) -> list[tuple[str, str, str]]:
+        """(nome, descrição, caminho/grupo) de todos os símbolos que a corretora oferece neste terminal."""
+        self._terminal()
+        found = self._mt5.symbols_get()
+        if found is None:
+            raise DataError(f"não consegui listar os símbolos: {self._mt5.last_error()}")
+        return sorted((s.name, s.description, s.path) for s in found)
+
     def rates(self, symbol: str, tf: str, start: dt.datetime, end: dt.datetime) -> np.ndarray:
         """Barras com abertura em [start, end), em blocos que cabem no limite do terminal."""
         mt5 = self._mt5
+        self._terminal()
         step = dt.timedelta(minutes=TF_MIN[tf] * int(self.maxbars * 0.4 / (_MIN_PER_DAY / 1440.0)))
         parts, t = [], start
         while t < end:
@@ -162,6 +204,7 @@ class BarCache:
         self.source = source
         self._head: dict[tuple[str, str], int] = {}   # inicio ja pedido ao terminal, por serie (neste processo)
         self._tail: dict[tuple[str, str], bool] = {}  # rabo (barras novas) ja atualizado, por serie
+        self._specs: dict[str, SymbolSpec] = {}       # especificacao do simbolo, uma consulta por processo
 
     def _file(self, symbol: str, tf: str) -> Path:
         return self.dir / f"{symbol}_{tf}.npz"
@@ -208,14 +251,18 @@ class BarCache:
         return cached[(cached["time"] >= s) & (cached["time"] < e)]
 
     def spec(self, symbol: str) -> SymbolSpec:
+        if symbol in self._specs:
+            return self._specs[symbol]
         f = self.dir / f"{symbol}_spec.json"
         if self.source is not None:
             spec = self.source.symbol_spec(symbol)
             f.write_text(json.dumps(asdict(spec)), encoding="utf-8")
-            return spec
-        if not f.is_file():
+        elif f.is_file():
+            spec = SymbolSpec(**json.loads(f.read_text(encoding="utf-8")))
+        else:
             raise DataError(f"sem cache da especificacao de {symbol} e sem conexao ao MT5")
-        return SymbolSpec(**json.loads(f.read_text(encoding="utf-8")))
+        self._specs[symbol] = spec
+        return spec
 
     def sub_tf(self, work_tf: str, start: dt.datetime, end: dt.datetime, symbol: str) -> str:
         """Menor sub-barra (divide o TF do EA) cuja janela cabe no limite do terminal e cuja historia

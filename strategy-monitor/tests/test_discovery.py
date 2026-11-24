@@ -79,8 +79,8 @@ strategies:
     assert [p.name for p in specs[0].params] == ["InpX", "InpY"]
 
 
-@pytest.mark.parametrize("param", ["InpMagicNumber", "InpTradeComment", "InpLogLevel", "InpRiskPercent"])
-def test_config_refuses_identity_and_risk_percent_params(tmp_path, param):
+@pytest.mark.parametrize("param", ["InpMagicNumber", "InpTradeComment", "InpLogLevel"])
+def test_config_refuses_identity_params(tmp_path, param):
     with pytest.raises(DiscoveryConfigError, match=param):
         load_discovery_config(_write(tmp_path, f"""
 settings: {{max_drawdown_pct: 4}}
@@ -152,7 +152,7 @@ def fake_engine(edge_fn, calls, fail=None, dead=()):
 
 def _settings(**kw):
     base = dict(trials=10, top_k=2, min_trades_is=10, min_trades_oos=5, max_drawdown_pct=50.0,
-                is_days=240, oos_days=45, folds=3, min_positive_folds=2, seed=1)
+                is_days=240, oos_days=45, folds=3, min_positive_folds=2, seed=1, size_last=False)
     base.update(kw)
     return Settings(**base)
 

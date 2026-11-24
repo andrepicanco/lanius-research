@@ -1,13 +1,15 @@
 """Casos de uso compartilhados pela CLI e pela tela: nada aqui imprime nem depende de Streamlit."""
 
 import datetime as dt
+import threading
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from .compare import Verdict, compare
 from .config import Config
-from .engine.mt5data import BarCache, DataError, Mt5Source
+from .engine.mt5data import BarCache, ConnectionLost, DataError, Mt5Source
 from .engine.run import run_engine, supported
 from .metrics import Metrics, attach_r_multiples, compute_metrics
 from .models import Report
@@ -23,6 +25,37 @@ class MonitorItem:
     verdict: Verdict
     window: JudgedWindow
     judged: list                # trades julgados (Trade)
+
+
+class BusyError(RuntimeError):
+    """Já há uma execução longa em andamento neste processo (a tela atende vários cliques no mesmo processo)."""
+
+
+_JOB = threading.Lock()
+_JOB_NAME = ""
+
+
+@contextmanager
+def exclusive(name: str):
+    """Uma execução longa por vez. Sem isso, trocar de página e disparar outra ação durante a descoberta
+    misturava duas execuções sobre a mesma conexão do MT5."""
+    global _JOB_NAME
+    if not _JOB.acquire(blocking=False):
+        raise BusyError(f"já existe uma execução em andamento ({_JOB_NAME}). Aguarde terminar antes de iniciar "
+                        "outra, e não mexa em outros controles da tela enquanto ela roda.")
+    _JOB_NAME = name
+    try:
+        yield
+    finally:
+        _JOB_NAME = ""
+        _JOB.release()
+
+
+def list_symbols(cfg: Config) -> list[tuple[str, str, str]]:
+    """Ativos que o MT5 aberto oferece: [(nome, descrição, grupo)]."""
+    source, _ = open_engine(cfg)
+    with source as src:
+        return src.symbols()
 
 
 def open_engine(cfg: Config) -> tuple[Mt5Source, Callable[[Mt5Source], BarCache]]:
@@ -50,7 +83,7 @@ def run_monitor(cfg: Config, bases: list[Report], until: dt.date,
     """Roda o motor no período posterior a cada baseline. Devolve (itens, avisos/erros por baseline)."""
     source, make_cache = open_engine(cfg)
     items, problems = [], []
-    with source as src:
+    with exclusive("monitor"), source as src:
         cache = make_cache(src)
         for base in bases:
             if not supported(base.expert):
@@ -84,14 +117,22 @@ def run_discovery(cfg: Config, settings, specs, baselines: dict[str, Report], on
     source, make_cache = open_engine(cfg)
     results, tpl_inputs = [], {}
     try:
-        with source as src:
-            run_fn = dsc.make_run_fn(make_cache(src))
+        with exclusive("descoberta"), source as src:
+            cache = make_cache(src)
+            run_fn = dsc.make_run_fn(cache)
+
+            def lot_bounds(symbol: str):
+                sp = cache.spec(symbol)
+                return sp.volume_min, sp.volume_step, sp.volume_max
+
             for i in items:
                 log(f"== {i['spec'].expert} · {i['symbol']} {i['timeframe']}")
                 res = dsc.discover_target(i["spec"], i["symbol"], i["template"], i["timeframe"], settings,
-                                          until, run_fn, log=log, on_row=csvw.add)
+                                          until, run_fn, log=log, on_row=csvw.add, lot_bounds=lot_bounds)
                 tpl_inputs[res.label] = i["template"].inputs
                 results.append(res)
+    except ConnectionLost as e:
+        raise ConnectionLost(f"{e} Resultados parciais em {out_dir / 'results.csv'}.") from None
     finally:
         csvw.close()
     dsc.write_report(out_dir / "report.md", results, settings, tpl_inputs, until)
@@ -114,7 +155,7 @@ def run_parity(cfg: Config, bases: list[Report]):
     from .engine import parity
     source, make_cache = open_engine(cfg)
     out = []
-    with source as src:
+    with exclusive("paridade"), source as src:
         cache = make_cache(src)
         for b in bases:
             if not supported(b.expert):
